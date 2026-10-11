@@ -8,6 +8,7 @@
 #include "GS/GSGL.h"
 #include "GS/GSPerfMon.h"
 #include "GS/GSUtil.h"
+#include "GS/GSVolumetric.h"
 #include "GS/Renderers/Vulkan/GSDeviceVK.h"
 #include "GS/Renderers/Vulkan/GSLsfg.h"
 #include "GS/Renderers/Vulkan/VKBuilders.h"
@@ -3527,6 +3528,13 @@ void GSDeviceVK::EndPresent()
 		// semantics, and hand the image to the frontend.
 		GSTextureVK* bb = s_libretro_bb[s_libretro_bb_idx].get();
 		bb->TransitionToLayout(cmdbuffer, GSTextureVK::Layout::ShaderReadOnly);
+		const GSVolumetricFrame& volumetric = GSVolumetric::CurrentFrame();
+		GSTextureVK* depth = VKLibretro::Active ? static_cast<GSTextureVK*>(volumetric.depth) : nullptr;
+		GSTextureVK* prehud = depth ? static_cast<GSTextureVK*>(volumetric.prehud) : nullptr;
+		if (depth)
+			depth->TransitionToLayout(cmdbuffer, GSTextureVK::Layout::ShaderReadOnly);
+		if (prehud)
+			prehud->TransitionToLayout(cmdbuffer, GSTextureVK::Layout::ShaderReadOnly);
 		g_perfmon.Put(GSPerfMon::RenderPasses, 1);
 
 		SubmitCommandBuffer(static_cast<VKSwapChain*>(nullptr));
@@ -3545,6 +3553,24 @@ void GSDeviceVK::EndPresent()
 		frame.format = bb->GetVkFormat();
 		frame.width = static_cast<u32>(bb->GetWidth());
 		frame.height = static_cast<u32>(bb->GetHeight());
+		if (depth)
+		{
+			frame.depth_image = depth->GetImage();
+			frame.depth_view = depth->GetView();
+			frame.depth_width = static_cast<u32>(depth->GetWidth());
+			frame.depth_height = static_cast<u32>(depth->GetHeight());
+			frame.depth_scale = volumetric.depth_scale;
+			const GSVector4& uv = volumetric.src_uv;
+			const GSVector4& rect = volumetric.draw_rect;
+			frame.depth_src_uv[0] = uv.x, frame.depth_src_uv[1] = uv.y, frame.depth_src_uv[2] = uv.z, frame.depth_src_uv[3] = uv.w;
+			frame.depth_draw_rect[0] = rect.x, frame.depth_draw_rect[1] = rect.y;
+			frame.depth_draw_rect[2] = rect.z, frame.depth_draw_rect[3] = rect.w;
+			if (prehud)
+			{
+				frame.prehud_image = prehud->GetImage();
+				frame.prehud_view = prehud->GetView();
+			}
+		}
 		s_libretro_bb_idx = (s_libretro_bb_idx + 1) % kLibretroBackbuffers;
 		VKLibretro::PublishFrame(frame);
 		return;

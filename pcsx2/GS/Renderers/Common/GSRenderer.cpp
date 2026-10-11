@@ -8,6 +8,7 @@
 #include "GS/Renderers/Common/GSInterlaceModePolicy.h"
 #include "GS/Renderers/Common/GSPresentationPolicy.h"
 #include "GS/Renderers/Common/GSSnapshotPolicy.h"
+#include "GS/GSVolumetric.h"
 #include "GS/DriverReport/GSDriverReport.h"
 #include "GS/GSDump.h"
 #include "GS/GSDumpBundle.h"
@@ -56,6 +57,35 @@ std::unique_ptr<GSRenderer> g_gs_renderer;
 // Since we read this on the EE thread, we can't put it in the renderer, because
 // we might be switching while the other thread reads it.
 static GSVector4 s_last_draw_rect;
+
+static bool s_volumetric_enabled = false;
+static bool s_volumetric_trace = false;
+static GSVolumetricFrame s_volumetric_frame;
+
+void GSVolumetric::SetTrace(bool enabled)
+{
+	s_volumetric_trace = enabled;
+}
+
+bool GSVolumetric::IsTraceEnabled()
+{
+	return s_volumetric_trace;
+}
+
+void GSVolumetric::SetEnabled(bool enabled)
+{
+	s_volumetric_enabled = enabled;
+}
+
+bool GSVolumetric::IsEnabled()
+{
+	return s_volumetric_enabled;
+}
+
+GSVolumetricFrame& GSVolumetric::CurrentFrame()
+{
+	return s_volumetric_frame;
+}
 
 // Last time we reset the renderer due to a GPU crash, if any.
 static Common::Timer::Value s_last_gpu_reset_time;
@@ -390,6 +420,12 @@ bool GSRenderer::Merge(int field)
 
 	const u32 c = (m_regs->BGCOLOR.U32[0] & 0x00FFFFFFu) | (m_regs->PMODE.ALP << 24);
 	g_gs_device->Merge(tex, src_gs_read, dst, top_band, fs, m_regs->PMODE, m_regs->EXTBUF, c);
+
+	if constexpr (merge_mode == MergeMode::Full)
+	{
+		if (GSVolumetric::IsEnabled())
+			MergeDepth(tex, src_gs_read, dst, fs);
+	}
 
 	// Show the detector this field, offset and all. It is told which offset was applied so it can
 	// take it back out and measure what the GAME did between fields. Costs nothing once decided.
@@ -1050,6 +1086,10 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
 		m_snapshot.empty() && !m_dump && m_dump_frames == 0 &&
 		!GSConfig.ShouldDump(s_n, g_perfmon.GetFrame()) && g_gs_device->GetCurrent() != nullptr;
 
+	// Whatever the merge below does not refresh must not be presented with this frame.
+	s_volumetric_frame.depth = nullptr;
+	s_volumetric_frame.prehud = nullptr;
+
 	bool merged_frame;
 	if (!request_skipped_final_render)
 	{
@@ -1171,6 +1211,8 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
 				src_rect, current->GetSize(), s_display_alignment, g_gs_device->UsesLowerLeftOrigin(),
 				GetVideoMode() == GSVideoMode::SDTV_480P);
 			s_last_draw_rect = draw_rect;
+			s_volumetric_frame.src_uv = src_uv;
+			s_volumetric_frame.draw_rect = draw_rect;
 
 			// MetalFX spatial upscale runs before CAS/present, and only when actually upscaling
 			// (source smaller than the on-screen draw rect). CAS can still sharpen afterward.

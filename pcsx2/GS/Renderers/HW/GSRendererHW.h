@@ -4,6 +4,9 @@
 #pragma once
 
 #include "GSTextureCache.h"
+#include <array>
+#include <map>
+#include <tuple>
 #include "GS/Renderers/HW/GSDrawAlphaMask.h"
 #include "GS/Renderers/Common/GSFunctionMap.h"
 #include "GS/Renderers/Common/GSNativeTexelGridPolicy.h"
@@ -434,6 +437,42 @@ private:
 	// software sprite renderer state
 	GSSwPrimRenderState m_sw_prim;
 
+	// PS2 Volumetric (GSVolumetric.h). Which depth target each colour target's 3D geometry (Z writes
+	// on, depth varying across the draw) was last drawn with, keyed by the colour target's base
+	// block; a few entries cover the scene, its post-processing buffers and double-buffered frames.
+	// Games often share one Z buffer between their frame buffers and clear it, or stamp the HUD into
+	// it, before the finished frame is displayed, so each pairing keeps a snapshot of the depth taken
+	// when its frame was done (see SnapshotDepthBeforeDraw).
+	struct DepthPairing
+	{
+		u32 rt_bp = 0;
+		u32 rt_bw = 0;
+		u32 z_bp = 0;
+		u32 z_bw = 0;
+		u32 z_psm = 0;
+		u64 last_draw = 0;
+		bool dirty = false; // 3D depth written since the last snapshot
+		GSTexture* snapshot = nullptr; // R32F copy of the whole depth target
+		float snapshot_scale = 1.0f; // the depth target's scale when copied
+		GSTexture* colour_snapshot = nullptr; // the colour target at the same moment
+		float colour_snapshot_scale = 1.0f;
+	};
+	std::array<DepthPairing, 8> m_depth_pairings{};
+	// The display targets GetOutput() returned this vsync, per circuit.
+	std::array<GSTextureCache::Target*, 2> m_output_rt{};
+	// Rings of R32F depth and RGBA8 pre-HUD canvases, so the host can still be reading earlier ones.
+	std::array<GSTexture*, 3> m_depth_canvas{};
+	std::array<GSTexture*, 3> m_prehud_canvas{};
+	u32 m_depth_canvas_index = 0;
+
+	void RecordDepthPairing(const GSTextureCache::Target* rt, const GSTextureCache::Target* ds);
+	void SnapshotDepthBeforeDraw();
+	void SnapshotDepth(DepthPairing& pairing);
+	// GSVolumetric::SetTrace: Z-writing draws per (rt bp, z bp, flat z, ztst) since the last print.
+	std::map<std::tuple<u32, u32, bool, u32>, u32> m_depth_trace;
+	u32 m_depth_trace_vsyncs = 0;
+	void ReleaseDepthCanvases();
+
 public:
 	GSRendererHW();
 	virtual ~GSRendererHW() override;
@@ -485,6 +524,7 @@ public:
 
 	GSTexture* GetOutput(int i, float& scale, int& y_offset) override;
 	GSTexture* GetFeedbackOutput(float& scale) override;
+	void MergeDepth(GSTexture* const* tex, const GSVector4* src_gs_read, const GSVector4* dst, const GSVector2i& fs) override;
 	void InvalidateVideoMem(const GIFRegBITBLTBUF& BITBLTBUF, const GSVector4i& r) override;
 	void InvalidateLocalMem(const GIFRegBITBLTBUF& BITBLTBUF, const GSVector4i& r, bool clut = false) override;
 	void Move() override;

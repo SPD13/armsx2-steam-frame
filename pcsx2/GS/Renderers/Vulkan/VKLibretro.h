@@ -68,6 +68,22 @@ namespace VKLibretro
 		VkFormat format = VK_FORMAT_UNDEFINED;
 		u32 width = 0;
 		u32 height = 0;
+
+		// PS2 Volumetric (GSVolumetric.h): depth of the displayed picture, when there is one. An
+		// R32F image in SHADER_READ_ONLY_OPTIMAL holding GS Z / 2^32 (larger is nearer); times
+		// depth_scale it is 0..1 of the Z format's range. depth_src_uv is the region of it that
+		// was presented, at depth_draw_rect (x0, y0, x1, y1 pixels) in the image above.
+		VkImage depth_image = VK_NULL_HANDLE;
+		VkImageView depth_view = VK_NULL_HANDLE;
+		u32 depth_width = 0;
+		u32 depth_height = 0;
+		float depth_scale = 0.0f;
+		float depth_src_uv[4] = {};
+		float depth_draw_rect[4] = {};
+		// RGBA8 image in the depth image's space and layout: the colour when the depth was taken.
+		// Where the presented picture differs from it, something was drawn after the 3D (HUD).
+		VkImage prehud_image = VK_NULL_HANDLE;
+		VkImageView prehud_view = VK_NULL_HANDLE;
 	};
 	void PublishFrame(const Frame& frame);
 	bool ConsumeFrame(Frame* out_frame); // true if a new frame arrived since the last consume
