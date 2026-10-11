@@ -115,6 +115,13 @@ if(UNIX AND ENABLE_LIBRETRO)
 	add_subdirectory(pcsx2-libretro)
 endif()
 
+# PS2 Volumetric: out-of-tree frontend (the Steam Frame VR host) built against the core.
+# The core's CMake relies on being the top-level project, so the host comes in from here.
+set(PS2V_HOST_DIR "" CACHE PATH "Source directory of the PS2 Volumetric VR host, empty to skip it")
+if(PS2V_HOST_DIR)
+	add_subdirectory(${PS2V_HOST_DIR} ps2v-host)
+endif()
+
 #-------------------------------------------------------------------------------
 if(NOT IS_SUPPORTED_COMPILER)
 	message(WARNING "
