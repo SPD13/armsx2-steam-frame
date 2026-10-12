@@ -7,10 +7,11 @@
 // The GS has no notion of "the depth of the displayed frame": the display circuits read colour
 // targets, and a depth buffer is only tied to a colour target while they are drawn together. So
 // the hardware renderer remembers which depth target each colour target's 3D geometry was drawn
-// with, snapshots that depth (and the colour) when the frame is done - before the next frame clears
-// a shared Z buffer, or a HUD is stamped into it - and at vsync copies the displayed target's
-// snapshot into float canvases through the same rectangles the display merge uses. Depth values
-// stay raw: GS Z / 2^32, larger is nearer.
+// with, snapshots that depth (and the colour) when the frame is done - when drawing moves to
+// another colour target, or before the next frame clears a shared Z buffer - and at vsync copies
+// the displayed target's depth (the snapshot, or the live target if it is still current) into
+// float canvases through the same rectangles the display merge uses. Depth values stay raw: GS Z /
+// 2^32, larger is nearer. A HUD drawn with Z writes sits at the format's maximum.
 
 #pragma once
 
@@ -28,6 +29,13 @@ struct GSVolumetricFrame
 	// RGBA8 canvas like depth: the colour as it was when the depth was snapshotted. Pixels where the
 	// presented frame differs were drawn after the 3D (HUD, overlays). Null when not available.
 	GSTexture* prehud = nullptr;
+	// Geometric stereo prototype (GSVolumetric::SetStereo): which eye the presented frame was drawn
+	// for, 0 = left, 1 = right; -1 without stereo.
+	int stereo_eye = -1;
+	// R32F canvas like depth: the depth target as it is at vsync, when depth comes from a snapshot
+	// taken during this frame. A HUD drawn after it with Z writes shows here at the Z format's
+	// maximum, which tells it apart from lights and effects drawn after it without Z.
+	GSTexture* live_depth = nullptr;
 	// The part of the merged frame (and so of the depth canvas) that is presented, as UVs ...
 	GSVector4 src_uv = GSVector4::zero();
 	// ... and where that part lands in the presented canvas, in pixels.
@@ -46,4 +54,26 @@ namespace GSVolumetric
 
 	// Written on the GS thread during VSync, read by the present path of the same vsync.
 	GSVolumetricFrame& CurrentFrame();
+
+	// Geometric stereo, frame-alternating prototype: the eye flips with each new frame, and every
+	// draw is shifted on screen by the current eye's offset from the screen centre times how far
+	// behind the screen its geometry is - the parallax of looking through a window, from that eye:
+	//   shift (NDC) = eye_offset (NDC) * depth_factor * f
+	//   Q mode: f = max(0, 1 - convergence * Q)          (Q = 1/w of perspective vertices)
+	//   Z mode: f = clamp(1 - Znorm / convergence, 0, 1) (Znorm = Z / format maximum)
+	// f is 0 for depth at the convergence (on the screen) and 1 for the farthest geometry.
+	// Screen-space (FST) draws and HUDs stamped at the maximum depth are not shifted.
+	struct StereoSettings
+	{
+		bool enabled = false;
+		bool z_mode = false;
+		float convergence = 1.0f;
+	};
+	void SetStereo(const StereoSettings& settings);
+	const StereoSettings& GetStereo();
+	int CurrentEye(); // 0 left, 1 right
+	// Per eye, set by the host every frame: its offset from the screen centre in NDC (x right, y
+	// down, as the eye would see the screen move) and the depth factor R / (D + R) for geometry R
+	// behind a screen D away.
+	void SetEyeView(int eye, float offset_x, float offset_y, float depth_factor);
 } // namespace GSVolumetric

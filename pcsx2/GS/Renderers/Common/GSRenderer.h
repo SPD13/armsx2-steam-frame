@@ -70,6 +70,8 @@ protected:
 	// to build the depth canvas that matches the merged frame. Renderers without depth targets
 	// leave GSVolumetric::CurrentFrame() empty.
 	virtual void MergeDepth(GSTexture* const* tex, const GSVector4* src_gs_read, const GSVector4* dst, const GSVector2i& fs) {}
+	// GSVolumetric stereo: the eye the target shown by the last merge was drawn for, -1 if unknown.
+	virtual int DisplayedStereoEye() { return -1; }
 
 public:
 	GSRenderer();

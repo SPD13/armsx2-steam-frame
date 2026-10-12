@@ -456,14 +456,20 @@ private:
 		float snapshot_scale = 1.0f; // the depth target's scale when copied
 		GSTexture* colour_snapshot = nullptr; // the colour target at the same moment
 		float colour_snapshot_scale = 1.0f;
+		u32 snapshot_vsync = 0; // m_depth_vsync when the snapshot was taken
 	};
 	std::array<DepthPairing, 8> m_depth_pairings{};
+	// GSVolumetric stereo: the eye each recently drawn colour target (by base block) was drawn for.
+	std::array<std::pair<u32, int>, 8> m_rt_stereo_eye{};
+	u32 m_rt_stereo_eye_next = 0;
 	// The display targets GetOutput() returned this vsync, per circuit.
 	std::array<GSTextureCache::Target*, 2> m_output_rt{};
 	// Rings of R32F depth and RGBA8 pre-HUD canvases, so the host can still be reading earlier ones.
 	std::array<GSTexture*, 3> m_depth_canvas{};
 	std::array<GSTexture*, 3> m_prehud_canvas{};
+	std::array<GSTexture*, 3> m_live_depth_canvas{};
 	u32 m_depth_canvas_index = 0;
+	u32 m_depth_vsync = 1; // counts MergeDepth calls; 0 never matches a snapshot
 
 	void RecordDepthPairing(const GSTextureCache::Target* rt, const GSTextureCache::Target* ds);
 	void SnapshotDepthBeforeDraw();
@@ -471,6 +477,8 @@ private:
 	// GSVolumetric::SetTrace: Z-writing draws per (rt bp, z bp, flat z, ztst) since the last print.
 	std::map<std::tuple<u32, u32, bool, u32>, u32> m_depth_trace;
 	u32 m_depth_trace_vsyncs = 0;
+	bool m_depth_trace_frame = false; // logging every draw of the current frame
+	float m_trace_q_min = 0.0f, m_trace_q_max = 0.0f; // Q range of perspective textured draws
 	void ReleaseDepthCanvases();
 
 public:
@@ -525,6 +533,7 @@ public:
 	GSTexture* GetOutput(int i, float& scale, int& y_offset) override;
 	GSTexture* GetFeedbackOutput(float& scale) override;
 	void MergeDepth(GSTexture* const* tex, const GSVector4* src_gs_read, const GSVector4* dst, const GSVector2i& fs) override;
+	int DisplayedStereoEye() override;
 	void InvalidateVideoMem(const GIFRegBITBLTBUF& BITBLTBUF, const GSVector4i& r) override;
 	void InvalidateLocalMem(const GIFRegBITBLTBUF& BITBLTBUF, const GSVector4i& r, bool clut = false) override;
 	void Move() override;

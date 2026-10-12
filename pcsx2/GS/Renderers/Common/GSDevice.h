@@ -1110,6 +1110,10 @@ struct alignas(16) GSHWDrawConfig
 		GSVector2 point_size;
 		u32 max_depth;
 		float line_aa1_width;
+		// GSVolumetric stereo: xy = this eye's shift for the farthest geometry (0 = off),
+		// z = convergence, w = 1 for Z mode; vr_stereo2.x = integer-scaled depth to 0..1 of the Z format.
+		GSVector4 vr_stereo;
+		GSVector4 vr_stereo2;
 		__fi VSConstantBuffer()
 		{
 			memset(static_cast<void*>(this), 0, sizeof(*this));

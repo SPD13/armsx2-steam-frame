@@ -19,6 +19,8 @@
 #include "GS/GSGL.h"
 #include "GS/GSPerfMon.h"
 #include "GS/GSVolumetric.h"
+
+GSVector4 GSVolumetricEyeShift(int eye); // GSRenderer.cpp
 #include "GS/GSUtil.h"
 #include "Host.h"
 #include "common/Console.h"
@@ -287,12 +289,30 @@ void GSRendererHW::SnapshotDepthBeforeDraw()
 {
 	const u32 fbp = m_cached_ctx.FRAME.Block();
 	const u32 zbp = m_cached_ctx.ZBUF.Block();
-	const bool flat_overwrite = !m_cached_ctx.ZBUF.ZMSK && m_vt.m_eq.z &&
+	// A clear: constant depth written unconditionally over (most of) the frame. HUD stamps are flat
+	// too but small; snapshotting before them would split a frame's depth from its colour (late 3D
+	// draws, often characters, follow the HUD), so only a clear marks the end of a frame.
+	// Measured against the scissor: field-rendered games draw 640x224 buffers.
+	const GIFRegSCISSOR& scissor = m_context->SCISSOR;
+	const float scissor_w = static_cast<float>(scissor.SCAX1 - scissor.SCAX0 + 1);
+	const float scissor_h = static_cast<float>(scissor.SCAY1 - scissor.SCAY0 + 1);
+	const bool covers_frame = (m_vt.m_max.p.x - m_vt.m_min.p.x) >= 0.9f * scissor_w &&
+	                          (m_vt.m_max.p.y - m_vt.m_min.p.y) >= 0.9f * scissor_h;
+	const bool flat_overwrite = !m_cached_ctx.ZBUF.ZMSK && m_vt.m_eq.z && covers_frame &&
 	                            (!m_cached_ctx.TEST.ZTE || m_cached_ctx.TEST.ZTST == ZTST_ALWAYS);
+	if (m_depth_trace_frame)
+	{
+		Console.WriteLnFmt("DepthTrace:   draw {} rt {:05x} z {:05x} {} {} ztst {} prim {} fbmsk {:08x} tex {} "
+						   "bounds {:.0f},{:.0f}-{:.0f},{:.0f} z {:.0f}..{:.0f}{}",
+			s_n, fbp, zbp, m_cached_ctx.ZBUF.ZMSK ? "zmask " : "zwrite", m_vt.m_eq.z ? "flat" : "3d  ",
+			m_cached_ctx.TEST.ZTE ? static_cast<int>(m_cached_ctx.TEST.ZTST) : 9, static_cast<int>(m_vt.m_primclass),
+			m_cached_ctx.FRAME.FBMSK, PRIM->TME ? "yes" : "no", m_vt.m_min.p.x, m_vt.m_min.p.y, m_vt.m_max.p.x,
+			m_vt.m_max.p.y, m_vt.m_min.p.z, m_vt.m_max.p.z, flat_overwrite ? " CLEAR" : "");
+	}
 	for (DepthPairing& p : m_depth_pairings)
 	{
 		// A frame's depth is done once drawing moves to another colour target, or when it is about
-		// to be overwritten wholesale: a clear, or a HUD stamped in at constant depth.
+		// to be cleared.
 		if (p.dirty && (p.rt_bp != fbp || (flat_overwrite && p.z_bp == zbp)))
 			SnapshotDepth(p);
 	}
@@ -320,10 +340,13 @@ static bool CopyTarget(GSTexture* src, GSTexture*& copy, GSTexture::Format forma
 void GSRendererHW::SnapshotDepth(DepthPairing& pairing)
 {
 	pairing.dirty = false;
+	if (m_depth_trace_frame)
+		Console.WriteLnFmt("DepthTrace:   SNAPSHOT rt {:05x} z {:05x}", pairing.rt_bp, pairing.z_bp);
 	GSTextureCache::Target* ds = g_texture_cache->FindExactTarget(pairing.z_bp, pairing.z_bw, GSTextureCache::DepthStencil);
 	if (!ds || !ds->m_texture || !CopyTarget(ds->m_texture, pairing.snapshot, GSTexture::Format::DepthColor))
 		return;
 	pairing.snapshot_scale = ds->m_scale;
+	pairing.snapshot_vsync = m_depth_vsync;
 
 	GSTextureCache::Target* rt = g_texture_cache->FindExactTarget(pairing.rt_bp, pairing.rt_bw, GSTextureCache::RenderTarget);
 	if (rt && rt->m_texture && rt->m_texture->GetFormat() == GSTexture::Format::Color &&
@@ -336,6 +359,20 @@ void GSRendererHW::SnapshotDepth(DepthPairing& pairing)
 	}
 }
 
+int GSRendererHW::DisplayedStereoEye()
+{
+	// The merge draws circuit 1 over circuit 0.
+	const GSTextureCache::Target* rt = m_output_rt[1] ? m_output_rt[1] : m_output_rt[0];
+	if (!rt)
+		return -1;
+	for (const auto& [bp, eye] : m_rt_stereo_eye)
+	{
+		if (bp == rt->m_TEX0.TBP0)
+			return eye;
+	}
+	return -1;
+}
+
 void GSRendererHW::ReleaseDepthCanvases()
 {
 	for (GSTexture*& canvas : m_depth_canvas)
@@ -344,11 +381,14 @@ void GSRendererHW::ReleaseDepthCanvases()
 			g_gs_device->Recycle(canvas);
 		canvas = nullptr;
 	}
-	for (GSTexture*& canvas : m_prehud_canvas)
+	for (auto* ring : {&m_prehud_canvas, &m_live_depth_canvas})
 	{
-		if (canvas)
-			g_gs_device->Recycle(canvas);
-		canvas = nullptr;
+		for (GSTexture*& canvas : *ring)
+		{
+			if (canvas)
+				g_gs_device->Recycle(canvas);
+			canvas = nullptr;
+		}
 	}
 	for (DepthPairing& p : m_depth_pairings)
 	{
@@ -367,13 +407,21 @@ void GSRendererHW::MergeDepth(GSTexture* const* tex, const GSVector4* src_gs_rea
 	GSVolumetricFrame& frame = GSVolumetric::CurrentFrame();
 	frame.depth = nullptr;
 	frame.prehud = nullptr;
+	frame.live_depth = nullptr;
+	const u32 vsync = m_depth_vsync++;
 
 	// The merge draws circuit 1 over circuit 0, and drops circuit 0 when both show the same target.
 	const int c = tex[1] ? 1 : 0;
 	GSTextureCache::Target* rt = m_output_rt[c];
+	// One frame in every 300 gets each draw logged, from this vsync to the next.
+	m_depth_trace_frame = GSVolumetric::IsTraceEnabled() && m_depth_trace_vsyncs == 150;
+	if (m_depth_trace_frame)
+		Console.WriteLnFmt("DepthTrace: frame after vsync, displayed rt {:05x}:", rt ? rt->m_TEX0.TBP0 : 0xFFFFFu);
 	if (GSVolumetric::IsTraceEnabled() && ++m_depth_trace_vsyncs >= 300)
 	{
-		Console.WriteLnFmt("DepthTrace: displayed rt {:05x} over {} vsyncs", rt ? rt->m_TEX0.TBP0 : 0xFFFFFu, m_depth_trace_vsyncs);
+		Console.WriteLnFmt("DepthTrace: displayed rt {:05x} over {} vsyncs, 3D textured Q {:.6f}..{:.6f}",
+			rt ? rt->m_TEX0.TBP0 : 0xFFFFFu, m_depth_trace_vsyncs, m_trace_q_min, m_trace_q_max);
+		m_trace_q_min = m_trace_q_max = 0.0f;
 		for (const auto& [key, count] : m_depth_trace)
 			Console.WriteLnFmt("DepthTrace:   rt {:05x} z {:05x} {} ztst {} : {} draws", std::get<0>(key), std::get<1>(key),
 				std::get<2>(key) ? "flat" : "3d  ", std::get<3>(key), count);
@@ -392,14 +440,17 @@ void GSRendererHW::MergeDepth(GSTexture* const* tex, const GSVector4* src_gs_rea
 	if (!pairing)
 		return;
 
-	// Still being drawn (nothing has moved on since its 3D): the live depth target. Otherwise the
-	// snapshot taken when the frame was done.
+	// The latest complete snapshot wins, if it is recent: games clear Z mid-frame before the HUD and
+	// draw a few things after it, and when a vsync lands before that clear the live depth is a frame
+	// half drawn. Only without a recent snapshot does a target still being drawn give its live depth.
+	const bool fresh_snapshot = pairing->snapshot && vsync - pairing->snapshot_vsync <= 1;
+	const bool recent_snapshot = pairing->snapshot && vsync - pairing->snapshot_vsync <= 3;
 	GSTexture* depth_src = nullptr;
 	float depth_scale = 1.0f;
 	GSTexture::Format depth_format = GSTexture::Format::DepthStencil;
 	GSTexture* prehud_src = nullptr; // the live frame has no HUD on top of it yet: no mask
 	float prehud_scale = 1.0f;
-	if (pairing->dirty)
+	if (pairing->dirty && !recent_snapshot)
 	{
 		GSTextureCache::Target* ds = g_texture_cache->FindExactTarget(pairing->z_bp, pairing->z_bw, GSTextureCache::DepthStencil);
 		if (ds && ds->m_texture)
@@ -408,8 +459,10 @@ void GSRendererHW::MergeDepth(GSTexture* const* tex, const GSVector4* src_gs_rea
 			depth_scale = ds->m_scale;
 		}
 	}
-	else if (pairing->snapshot)
+	else if (recent_snapshot)
 	{
+		// A snapshot more than a few vsyncs old belongs to an earlier scene: a movie or 2D screen
+		// drawn into the same target since has no depth of its own.
 		depth_src = pairing->snapshot;
 		depth_scale = pairing->snapshot_scale;
 		depth_format = GSTexture::Format::DepthColor;
@@ -454,6 +507,18 @@ void GSRendererHW::MergeDepth(GSTexture* const* tex, const GSVector4* src_gs_rea
 			g_gs_device->StretchRect(prehud_src, src_rect(prehud_src, prehud_scale), prehud, dst[c],
 				GetConvertShader(GSTexture::Format::Color, GSTexture::Format::Color), Filter::Nearest);
 			frame.prehud = prehud;
+		}
+	}
+
+	if (fresh_snapshot)
+	{
+		GSTextureCache::Target* ds = g_texture_cache->FindExactTarget(pairing->z_bp, pairing->z_bw, GSTextureCache::DepthStencil);
+		GSTexture* live = ds && ds->m_texture ? canvas_for(m_live_depth_canvas[ring], GSTexture::Format::DepthColor) : nullptr;
+		if (live)
+		{
+			g_gs_device->StretchRect(ds->m_texture, src_rect(ds->m_texture, ds->m_scale), live, dst[c],
+				GetConvertShader(GSTexture::Format::DepthStencil, GSTexture::Format::DepthColor), Filter::Nearest);
+			frame.live_depth = live;
 		}
 	}
 
@@ -7277,6 +7342,24 @@ void GSRendererHW::DetermineVSConfig(GSTextureCache::Target* rt, float rtscale, 
 	m_conf.cb_vs.vertex_scale = GSVector2(sx, sy);
 	m_conf.cb_vs.vertex_offset = GSVector2(ox * sx + ox2 + 1, oy * sy + oy2 + 1);
 
+	// GSVolumetric stereo prototype: this frame's eye.
+	const GSVolumetric::StereoSettings& stereo = GSVolumetric::GetStereo();
+	// A draw at constant depth at the Z format's maximum is a HUD stamped over the scene (Time Crisis
+	// II draws its whole HUD that way, with ordinary texture coordinates): no shift, on the screen.
+	const u64 z_format_max = (1ull << GSLocalMemory::m_psm[m_cached_ctx.ZBUF.PSM].trbpp) - 1;
+	const bool hud_at_max_depth = m_vt.m_eq.z && m_vt.m_min.p.z >= static_cast<float>(z_format_max);
+	if (stereo.enabled && !hud_at_max_depth)
+	{
+		const GSVector4 shift = GSVolumetricEyeShift(GSVolumetric::CurrentEye());
+		m_conf.cb_vs.vr_stereo = GSVector4(shift.x, shift.y, stereo.convergence, stereo.z_mode ? 1.0f : 0.0f);
+		m_conf.cb_vs.vr_stereo2 = GSVector4(4294967296.0f / static_cast<float>(z_format_max), 0.0f, 0.0f, 0.0f);
+	}
+	else
+	{
+		m_conf.cb_vs.vr_stereo = GSVector4::zero();
+		m_conf.cb_vs.vr_stereo2 = GSVector4::zero();
+	}
+
 	// A sprite that reads its texture on the native texel grid needs this transform to be the
 	// plain one: native coordinate n at device coordinate n * scale + 0.5. Half-pixel-offset modes
 	// that place the vertices elsewhere make floor(fragment)/scale the wrong native pixel, so the
@@ -11199,11 +11282,30 @@ __ri void GSRendererHW::DrawPrims(GSTextureCache::Target* rt, GSTextureCache::Ta
 	// Z setup has to come before channel shuffle
 	EmulateZbuffer(ds);
 
+	if (rt && GSVolumetric::GetStereo().enabled)
+	{
+		auto it = std::find_if(m_rt_stereo_eye.begin(), m_rt_stereo_eye.end(),
+			[bp = rt->m_TEX0.TBP0](const auto& e) { return e.first == bp; });
+		if (it == m_rt_stereo_eye.end())
+		{
+			it = m_rt_stereo_eye.begin() + m_rt_stereo_eye_next;
+			m_rt_stereo_eye_next = (m_rt_stereo_eye_next + 1) % m_rt_stereo_eye.size();
+		}
+		*it = {static_cast<u32>(rt->m_TEX0.TBP0), GSVolumetric::CurrentEye()};
+	}
+
 	if (rt && ds && !m_using_temp_z && !m_cached_ctx.ZBUF.ZMSK && GSVolumetric::IsEnabled())
 	{
 		if (GSVolumetric::IsTraceEnabled())
+		{
 			m_depth_trace[{static_cast<u32>(rt->m_TEX0.TBP0), static_cast<u32>(ds->m_TEX0.TBP0), m_vt.m_eq.z != 0,
 				m_cached_ctx.TEST.ZTE ? static_cast<u32>(m_cached_ctx.TEST.ZTST) : 9u}]++;
+			if (PRIM->TME && !PRIM->FST && !m_vt.m_eq.z)
+			{
+				m_trace_q_min = m_trace_q_max == 0.0f ? m_vt.m_min.t.z : std::min(m_trace_q_min, m_vt.m_min.t.z);
+				m_trace_q_max = std::max(m_trace_q_max, m_vt.m_max.t.z);
+			}
+		}
 		if (!m_vt.m_eq.z)
 			RecordDepthPairing(rt, ds);
 	}

@@ -36,6 +36,7 @@
 #include "IconsFontAwesome.h"
 
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <deque>
 #include <thread>
@@ -59,6 +60,41 @@ std::unique_ptr<GSRenderer> g_gs_renderer;
 static GSVector4 s_last_draw_rect;
 
 static bool s_volumetric_enabled = false;
+static GSVolumetric::StereoSettings s_stereo;
+static int s_stereo_eye = 0;
+
+void GSVolumetric::SetStereo(const StereoSettings& settings)
+{
+	s_stereo = settings;
+}
+
+const GSVolumetric::StereoSettings& GSVolumetric::GetStereo()
+{
+	return s_stereo;
+}
+
+int GSVolumetric::CurrentEye()
+{
+	return s_stereo_eye;
+}
+
+// Written by the host thread, read by the GS thread per draw; a torn update only mixes two
+// consecutive head positions.
+static std::atomic<float> s_eye_view[2][3] = {};
+
+void GSVolumetric::SetEyeView(int eye, float offset_x, float offset_y, float depth_factor)
+{
+	s_eye_view[eye][0].store(offset_x, std::memory_order_relaxed);
+	s_eye_view[eye][1].store(offset_y, std::memory_order_relaxed);
+	s_eye_view[eye][2].store(depth_factor, std::memory_order_relaxed);
+}
+
+GSVector4 GSVolumetricEyeShift(int eye)
+{
+	const float k = s_eye_view[eye][2].load(std::memory_order_relaxed);
+	return GSVector4(s_eye_view[eye][0].load(std::memory_order_relaxed) * k,
+		s_eye_view[eye][1].load(std::memory_order_relaxed) * k, 0.0f, 0.0f);
+}
 static bool s_volumetric_trace = false;
 static GSVolumetricFrame s_volumetric_frame;
 
@@ -1089,6 +1125,7 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
 	// Whatever the merge below does not refresh must not be presented with this frame.
 	s_volumetric_frame.depth = nullptr;
 	s_volumetric_frame.prehud = nullptr;
+	s_volumetric_frame.live_depth = nullptr;
 
 	bool merged_frame;
 	if (!request_skipped_final_render)
@@ -1106,6 +1143,21 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
 		merged_frame = Merge<MergeMode::SkipFinalComposition>(field);
 	}
 	const bool skipped_final_render = request_skipped_final_render && merged_frame;
+
+	// Stereo: the presented frame belongs to the eye its target was drawn for (a double-buffered
+	// game shows the buffer drawn during the previous frame); the next frame is drawn for the
+	// other eye.
+	if (s_stereo.enabled)
+	{
+		const int shown = DisplayedStereoEye();
+		s_volumetric_frame.stereo_eye = shown >= 0 ? shown : s_stereo_eye;
+		if (!idle_frame)
+			s_stereo_eye ^= 1;
+	}
+	else
+	{
+		s_volumetric_frame.stereo_eye = -1;
+	}
 	const bool blank_frame = !merged_frame;
 	// Run length, not just "was blank": the policy below distinguishes a single alternating blank
 	// (an interlaced-field artefact, safe to drop) from a run of them (a fade the game is actually

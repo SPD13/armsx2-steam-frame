@@ -3535,6 +3535,9 @@ void GSDeviceVK::EndPresent()
 			depth->TransitionToLayout(cmdbuffer, GSTextureVK::Layout::ShaderReadOnly);
 		if (prehud)
 			prehud->TransitionToLayout(cmdbuffer, GSTextureVK::Layout::ShaderReadOnly);
+		GSTextureVK* live_depth = depth ? static_cast<GSTextureVK*>(volumetric.live_depth) : nullptr;
+		if (live_depth)
+			live_depth->TransitionToLayout(cmdbuffer, GSTextureVK::Layout::ShaderReadOnly);
 		g_perfmon.Put(GSPerfMon::RenderPasses, 1);
 
 		SubmitCommandBuffer(static_cast<VKSwapChain*>(nullptr));
@@ -3553,6 +3556,7 @@ void GSDeviceVK::EndPresent()
 		frame.format = bb->GetVkFormat();
 		frame.width = static_cast<u32>(bb->GetWidth());
 		frame.height = static_cast<u32>(bb->GetHeight());
+		frame.stereo_eye = volumetric.stereo_eye;
 		if (depth)
 		{
 			frame.depth_image = depth->GetImage();
@@ -3569,6 +3573,11 @@ void GSDeviceVK::EndPresent()
 			{
 				frame.prehud_image = prehud->GetImage();
 				frame.prehud_view = prehud->GetView();
+			}
+			if (live_depth)
+			{
+				frame.live_depth_image = live_depth->GetImage();
+				frame.live_depth_view = live_depth->GetView();
 			}
 		}
 		s_libretro_bb_idx = (s_libretro_bb_idx + 1) % kLibretroBackbuffers;

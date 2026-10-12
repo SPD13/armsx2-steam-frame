@@ -25,7 +25,23 @@ layout(std140, set = 0, binding = 0) uniform cb0
 	vec2 PointSize;
 	uint MaxDepth;
 	float LineAA1Width;
+	vec4 VRStereo; // GSVolumetric stereo: xy this eye's shift for the farthest geometry (0 = off), z convergence, w Z mode
+	vec4 VRStereo2; // x: integer-scaled depth to 0..1 of the Z format
 };
+
+// GSVolumetric stereo: on-screen shift of a vertex for the current eye's position, in NDC - the
+// parallax of a window: geometry at the convergence stays on the screen, the farthest moves most.
+vec2 VRStereoShift(float q, float z_ndc)
+{
+	if (VRStereo.x == 0.0f && VRStereo.y == 0.0f)
+		return vec2(0.0f);
+	float f;
+	if (VRStereo.w != 0.0f)
+		f = clamp(1.0f - (z_ndc * VRStereo2.x) / max(VRStereo.z, 1e-6f), 0.0f, 1.0f);
+	else
+		f = max(0.0f, 1.0f - VRStereo.z * q);
+	return VRStereo.xy * f;
+}
 
 layout(location = 0) out VSOutput
 {
@@ -66,6 +82,9 @@ void main()
 	gl_Position.xy = gl_Position.xy * vec2(VertexScale.x, -VertexScale.y) - vec2(VertexOffset.x, -VertexOffset.y);
 	gl_Position.z *= exp2(-32.0f);		// integer->float depth
 	gl_Position.y = -gl_Position.y;
+#if !VS_FST
+	gl_Position.xy += VRStereoShift(a_q, gl_Position.z);
+#endif
 
 #if GPU_PROFILE_MALI
 	// Mali HW bug (PPSSPP EQUAL_WZ_CORRUPTS_DEPTH): clip-space z == w corrupts the
@@ -175,6 +194,9 @@ ProcessedVertex load_vertex(uint index)
 	vtx.p.xy = vtx.p.xy * vec2(VertexScale.x, -VertexScale.y) - vec2(VertexOffset.x, -VertexOffset.y);
 	vtx.p.z *= exp2(-32.0f);		// integer->float depth
 	vtx.p.y = -vtx.p.y;
+#if !VS_FST
+	vtx.p.xy += VRStereoShift(a_q, vtx.p.z);
+#endif
 
 	#if VS_TME
 		vec2 uv = a_uv - TextureOffset;

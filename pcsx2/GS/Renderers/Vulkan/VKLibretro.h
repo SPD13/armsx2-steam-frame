@@ -84,6 +84,12 @@ namespace VKLibretro
 		// Where the presented picture differs from it, something was drawn after the 3D (HUD).
 		VkImage prehud_image = VK_NULL_HANDLE;
 		VkImageView prehud_view = VK_NULL_HANDLE;
+		// R32F like the depth image: the depth target at vsync when the depth above is a snapshot
+		// from this frame. A HUD that writes Z after the snapshot is at depth_scale * value >= 1.
+		VkImage live_depth_image = VK_NULL_HANDLE;
+		VkImageView live_depth_view = VK_NULL_HANDLE;
+		// Geometric stereo prototype: 0 = this frame was drawn for the left eye, 1 = right, -1 = mono.
+		int stereo_eye = -1;
 	};
 	void PublishFrame(const Frame& frame);
 	bool ConsumeFrame(Frame* out_frame); // true if a new frame arrived since the last consume
