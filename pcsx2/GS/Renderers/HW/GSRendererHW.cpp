@@ -7410,6 +7410,19 @@ void GSRendererHW::DetermineVSConfig(GSTextureCache::Target* rt, float rtscale, 
 		m_conf.cb_vs.vr_stereo = GSVector4::zero();
 		m_conf.cb_vs.vr_stereo2 = GSVector4::zero();
 	}
+	if (stereo.enabled && GSVolumetric::DrawTraceActive())
+	{
+		const char* why = !m_stereo_display_target ? "offscreen" :
+						  hud_at_max_depth         ? "pin:hud" :
+						  m_stereo_source          ? "pin:stereo-source" :
+						  m_stereo_screen_space    ? (m_process_texture ? "pin:q1" : "pin:fill") :
+													 "shifted";
+		Console.WriteLn("Draw stereo: %s z %.0f..%.0f q %.3f..%.3f eqz %d eqq %d fst %d abe %d abcd %d%d%d%d zte %d ztst %d zmsk %d",
+			why, m_vt.m_min.p.z, m_vt.m_max.p.z, m_vt.m_min.t.z, m_vt.m_max.t.z, m_vt.m_eq.z ? 1 : 0, m_vt.m_eq.q ? 1 : 0,
+			PRIM->FST ? 1 : 0, PRIM->ABE ? 1 : 0, static_cast<int>(m_context->ALPHA.A), static_cast<int>(m_context->ALPHA.B),
+			static_cast<int>(m_context->ALPHA.C), static_cast<int>(m_context->ALPHA.D), static_cast<int>(m_cached_ctx.TEST.ZTE),
+			static_cast<int>(m_cached_ctx.TEST.ZTST), m_cached_ctx.ZBUF.ZMSK ? 1 : 0);
+	}
 
 	// A sprite that reads its texture on the native texel grid needs this transform to be the
 	// plain one: native coordinate n at device coordinate n * scale + 0.5. Half-pixel-offset modes
@@ -11569,11 +11582,18 @@ __ri void GSRendererHW::DrawPrims(GSTextureCache::Target* rt, GSTextureCache::Ta
 	// a 2D quad given 3D coordinates. A texture holding the same picture in both layers is an
 	// ordinary texture, wherever the texture cache keeps it: Time Crisis II textures its scene from
 	// an area the cache holds as a target, and draws its transparent scenery with Q = 1.
+	// In Z mode the shift comes from Z alone, so a Q = 1 draw tested against the scene's depth at a
+	// real Z sits where its Z puts it and is shifted like the rest: Time Crisis II draws the halos
+	// of its wall lamps as additive Q = 1 billboards at the lamp's depth, which pinned to the glass
+	// floated in front of the wall.
 	const bool stereo_source = tex && tex->m_texture && tex->m_texture->HasStereoContent();
+	const bool depth_placed = GSVolumetric::GetStereo().z_mode && m_cached_ctx.TEST.ZTE &&
+							  (m_cached_ctx.TEST.ZTST == ZTST_GEQUAL || m_cached_ctx.TEST.ZTST == ZTST_GREATER) &&
+							  m_vt.m_min.p.z > 0.0f;
 	m_stereo_source = stereo_source;
 	m_stereo_screen_space = stereo_source ||
 		((m_vt.m_primclass == GS_SPRITE_CLASS || m_vt.m_eq.z) && m_process_texture && !PRIM->FST && m_vt.m_eq.q &&
-			m_vt.m_min.t.z == 1.0f);
+			m_vt.m_min.t.z == 1.0f && !depth_placed);
 	// An untextured fill across the whole width (a background colour or clear at the far plane)
 	// moved by the parallax would leave a strip of stale picture along one edge.
 	if (!m_process_texture && (m_vt.m_primclass == GS_SPRITE_CLASS || m_vt.m_eq.z) && rt &&
