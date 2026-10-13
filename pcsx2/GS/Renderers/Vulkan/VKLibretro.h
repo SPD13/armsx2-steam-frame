@@ -69,7 +69,7 @@ namespace VKLibretro
 		u32 width = 0;
 		u32 height = 0;
 
-		// PS2 Volumetric (GSVolumetric.h): depth of the displayed picture, when there is one. An
+		// ARMSX2 VR (GSVolumetric.h): depth of the displayed picture, when there is one. An
 		// R32F image in SHADER_READ_ONLY_OPTIMAL holding GS Z / 2^32 (larger is nearer); times
 		// depth_scale it is 0..1 of the Z format's range. depth_src_uv is the region of it that
 		// was presented, at depth_draw_rect (x0, y0, x1, y1 pixels) in the image above.

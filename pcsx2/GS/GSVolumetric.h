@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2002-2026 PCSX2 Dev Team
 // SPDX-License-Identifier: GPL-3.0+
 
-// PS2 Volumetric: depth that lines up with the presented image, for hosts that show the game in
+// ARMSX2 VR: depth that lines up with the presented image, for hosts that show the game in
 // 3D (the Steam Frame VR host reads it through VKLibretro::Frame).
 //
 // The GS has no notion of "the depth of the displayed frame": the display circuits read colour

@@ -442,7 +442,7 @@ private:
 	// software sprite renderer state
 	GSSwPrimRenderState m_sw_prim;
 
-	// PS2 Volumetric (GSVolumetric.h). Which depth target each colour target's 3D geometry (Z writes
+	// ARMSX2 VR (GSVolumetric.h). Which depth target each colour target's 3D geometry (Z writes
 	// on, depth varying across the draw) was last drawn with, keyed by the colour target's base
 	// block; a few entries cover the scene, its post-processing buffers and double-buffered frames.
 	// Games often share one Z buffer between their frame buffers and clear it, or stamp the HUD into

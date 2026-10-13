@@ -66,7 +66,7 @@ protected:
 	virtual GSTexture* GetOutput(int i, float& scale, int& y_offset) = 0;
 	virtual GSTexture* GetFeedbackOutput(float& scale) { return nullptr; }
 
-	// PS2 Volumetric (GSVolumetric.h): called right after the display merge with the same inputs,
+	// ARMSX2 VR (GSVolumetric.h): called right after the display merge with the same inputs,
 	// to build the depth canvas that matches the merged frame. Renderers without depth targets
 	// leave GSVolumetric::CurrentFrame() empty.
 	virtual void MergeDepth(GSTexture* const* tex, const GSVector4* src_gs_read, const GSVector4* dst, const GSVector2i& fs) {}
