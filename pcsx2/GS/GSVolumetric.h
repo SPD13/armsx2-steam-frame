@@ -47,7 +47,8 @@ struct GSVolumetricFrame
 
 namespace GSVolumetric
 {
-	// Off by default; a host that consumes depth turns it on before the GS opens.
+	// Off by default; a host that consumes depth turns it on before the GS opens, or while it runs
+	// (depth then starts with the next frames drawn).
 	void SetEnabled(bool enabled);
 	bool IsEnabled();
 

@@ -3692,6 +3692,8 @@ void GSDeviceVK::EndPresent()
 		frame.width = static_cast<u32>(bb->GetWidth());
 		frame.height = static_cast<u32>(bb->GetHeight());
 		frame.stereo_eye = volumetric.stereo_eye;
+		frame.draw_rect[0] = volumetric.draw_rect.x, frame.draw_rect[1] = volumetric.draw_rect.y;
+		frame.draw_rect[2] = volumetric.draw_rect.z, frame.draw_rect[3] = volumetric.draw_rect.w;
 		if (bb_right)
 		{
 			frame.right_image = bb_right->GetImage();

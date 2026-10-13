@@ -91,9 +91,12 @@ namespace VKLibretro
 		// Geometric stereo prototype: 0 = this frame was drawn for the left eye, 1 = right, -1 = mono.
 		int stereo_eye = -1;
 		// Multiview stereo: image above is the left eye, this one (same size, format and layout) the
-		// right. Null without multiview stereo.
+		// right. Null without multiview stereo. The depth image then has a layer per eye too.
 		VkImage right_image = VK_NULL_HANDLE;
 		VkImageView right_view = VK_NULL_HANDLE;
+		// Where the game's picture lies in the image (x0, y0, x1, y1 pixels), with or without depth:
+		// the rest is border. Light guns aim in this space.
+		float draw_rect[4] = {};
 	};
 	void PublishFrame(const Frame& frame);
 	bool ConsumeFrame(Frame* out_frame); // true if a new frame arrived since the last consume

@@ -59,7 +59,8 @@ std::unique_ptr<GSRenderer> g_gs_renderer;
 // we might be switching while the other thread reads it.
 static GSVector4 s_last_draw_rect;
 
-static bool s_volumetric_enabled = false;
+// Atomic: a host may switch it while the GS runs (the light gun needs depth in stereo mode).
+static std::atomic<bool> s_volumetric_enabled{false};
 static GSVolumetric::StereoSettings s_stereo;
 static int s_stereo_eye = 0;
 
@@ -145,12 +146,12 @@ bool GSVolumetric::IsTraceEnabled()
 
 void GSVolumetric::SetEnabled(bool enabled)
 {
-	s_volumetric_enabled = enabled;
+	s_volumetric_enabled.store(enabled, std::memory_order_relaxed);
 }
 
 bool GSVolumetric::IsEnabled()
 {
-	return s_volumetric_enabled;
+	return s_volumetric_enabled.load(std::memory_order_relaxed);
 }
 
 GSVolumetricFrame& GSVolumetric::CurrentFrame()

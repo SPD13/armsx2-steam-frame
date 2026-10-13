@@ -17,6 +17,8 @@
 #include "common/Console.h"
 #include "common/StringUtil.h"
 
+#include <atomic>
+#include <iterator>
 #include <tuple>
 
 namespace usb_lightgun
@@ -95,6 +97,39 @@ namespace usb_lightgun
 		{"SLPM-62205", 110.15f, 100.0f, 433, 159, 512, 256}, // Virtua Cop Re-Birth (J) (480i)
 		// {"SLES-51229", 85.75f, 92.0f, 456, 164, 640, 256}, // Virtua Cop - Elite Edition (E,J) (480p)
 	};
+
+	// ARMSX2 VR: per-port gun state from the host (SetHostState).
+	struct HostState
+	{
+		std::atomic<bool> active{false};
+		std::atomic<bool> aim_valid{false};
+		std::atomic<float> x{0.0f};
+		std::atomic<float> y{0.0f};
+		std::atomic<u32> buttons{0};
+	};
+	static HostState s_host_state[2];
+
+	void SetHostState(u32 port, bool active, bool aim_valid, float window_x, float window_y, u32 buttons)
+	{
+		if (port >= std::size(s_host_state))
+			return;
+		HostState& h = s_host_state[port];
+		h.x.store(window_x, std::memory_order_relaxed);
+		h.y.store(window_y, std::memory_order_relaxed);
+		h.aim_valid.store(aim_valid, std::memory_order_relaxed);
+		h.buttons.store(buttons, std::memory_order_relaxed);
+		h.active.store(active, std::memory_order_release);
+	}
+
+	bool IsKnownGame(std::string_view serial)
+	{
+		for (const GameConfig& gc : s_game_config)
+		{
+			if (serial == gc.serial)
+				return true;
+		}
+		return false;
+	}
 
 	static constexpr s32 DEFAULT_SCREEN_WIDTH = 640;
 	static constexpr s32 DEFAULT_SCREEN_HEIGHT = 240;
@@ -270,6 +305,10 @@ namespace usb_lightgun
 			{
 				if (p->ep->nr == 1)
 				{
+					// ARMSX2 VR: the host's buttons replace the bound ones while it drives this port.
+					if (us->port < std::size(s_host_state) && s_host_state[us->port].active.load(std::memory_order_acquire))
+						us->button_state = s_host_state[us->port].buttons.load(std::memory_order_relaxed);
+
 					const auto [pos_x, pos_y] = us->CalculatePosition();
 
 					// Time Crisis games do a "calibration" by displaying a black frame for a single frame,
@@ -371,9 +410,22 @@ namespace usb_lightgun
 	std::tuple<s16, s16> GunCon2State::CalculatePosition()
 	{
 		float pointer_x, pointer_y;
-		const auto& [window_x, window_y] =
-			(has_relative_binds) ? GetAbsolutePositionFromRelativeAxes() : InputManager::GetPointerAbsolutePosition(0);
-		GSTranslateWindowToDisplayCoordinates(window_x, window_y, &pointer_x, &pointer_y);
+		if (port < std::size(s_host_state) && s_host_state[port].active.load(std::memory_order_acquire))
+		{
+			// ARMSX2 VR: this port's own aim from the host.
+			const HostState& h = s_host_state[port];
+			if (h.aim_valid.load(std::memory_order_relaxed))
+				GSTranslateWindowToDisplayCoordinates(h.x.load(std::memory_order_relaxed), h.y.load(std::memory_order_relaxed),
+					&pointer_x, &pointer_y);
+			else
+				pointer_x = pointer_y = -1.0f;
+		}
+		else
+		{
+			const auto& [window_x, window_y] =
+				(has_relative_binds) ? GetAbsolutePositionFromRelativeAxes() : InputManager::GetPointerAbsolutePosition(0);
+			GSTranslateWindowToDisplayCoordinates(window_x, window_y, &pointer_x, &pointer_y);
+		}
 
 		s16 pos_x, pos_y;
 		if (pointer_x < 0.0f || pointer_y < 0.0f)
