@@ -988,6 +988,7 @@ public:
 	void CheckStereoRenderPass(VkRenderPass rp);
 	GSTextureVK* PresentRightEye(VkCommandBuffer cmdbuffer, GSTextureVK* bb);
 	void DebugReadFlushRange();
+	void RestartMultiviewPassForNewConstants();
 	void DebugRebindVertexBuffer();
 	u32 m_debug_draw_index = 0;
 	static u32 s_debug_flush_first, s_debug_flush_last;

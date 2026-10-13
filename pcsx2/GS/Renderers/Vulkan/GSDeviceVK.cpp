@@ -4333,7 +4333,7 @@ void GSDeviceVK::ResolveFeatureTable()
 	// The profile leaves Texture Preloading alone: the user's setting outranks a pool-size heuristic.
 #endif
 	m_features.provoking_vertex_last = m_optional_extensions.vk_ext_provoking_vertex;
-	m_features.vs_expand = !GSConfig.DisableVertexShaderExpand;
+	m_features.vs_expand = !GSConfig.DisableVertexShaderExpand && !std::getenv("PS2V_NO_VSEXPAND"); // env: experiment
 	m_features.sprite_edge_clamp = true;
 
 	if (!m_features.texture_barrier)
@@ -4530,7 +4530,8 @@ void GSDeviceVK::ResolveStreamRingMemory()
 	inputs.type_flags = type_flags;
 	inputs.type_count = memory_properties.memoryTypeCount;
 	inputs.prefer_cached_over_write_combined =
-		UsesMobileDriverWorkaround(DriverWorkaround::PreferCachedStreamRingMemory);
+		UsesMobileDriverWorkaround(DriverWorkaround::PreferCachedStreamRingMemory) ||
+		std::getenv("PS2V_CACHED_RINGS") != nullptr; // experiment
 	m_stream_ring_memory = GSDecideStreamRingMemory(inputs);
 }
 
@@ -9485,13 +9486,35 @@ bool GSDeviceVK::ApplyUtilityState(bool already_execed)
 void GSDeviceVK::SetVSConstantBuffer(const GSHWDrawConfig::VSConstantBuffer& cb)
 {
 	if (m_vs_cb_cache.Update(cb))
+	{
 		m_dirty_flags |= DIRTY_FLAG_VS_CONSTANT_BUFFER;
+		RestartMultiviewPassForNewConstants();
+	}
 }
 
 void GSDeviceVK::SetPSConstantBuffer(const GSHWDrawConfig::PSConstantBuffer& cb)
 {
 	if (m_ps_cb_cache.Update(cb))
+	{
 		m_dirty_flags |= DIRTY_FLAG_PS_CONSTANT_BUFFER;
+		RestartMultiviewPassForNewConstants();
+	}
+}
+
+void GSDeviceVK::RestartMultiviewPassForNewConstants()
+{
+	// GSVolumetric multiview stereo: inside a multiview render pass, Turnip (Adreno 750, Mesa 26.3)
+	// does not reliably apply a new dynamic offset of the constant buffers to the following draws;
+	// they keep an earlier draw's constants. With the vertex transform taken from the wrong draw,
+	// Time Crisis II's first shooting room came out with its walls missing and its furniture drawn
+	// several times over (docs/m3-multiview.md). A pass begun after the change reads the right
+	// offset, so restart the open pass in place: same framebuffer, contents loaded.
+	if (!IsMultiview() || !InRenderPass())
+		return;
+	const VkRenderPass pass = m_current_render_pass;
+	const GSVector4i area = m_current_render_pass_area;
+	EndRenderPass();
+	BeginRenderPass(GetRenderPassForRestarting(pass), area);
 }
 
 void GSDeviceVK::SetVSPushConstants(u32 base_vertex, u32 base_index, bool force_update)
@@ -9640,6 +9663,14 @@ bool GSDeviceVK::DateCopyLive(const GSHWDrawConfig& config)
 void GSDeviceVK::DoRenderHW(GSHWDrawConfig& config)
 {
 	// Experiment (PS2V_MV_DIRTY): rebind all draw state for every hardware draw in multiview.
+	// Experiment (PS2V_GS_DELAY_US=n): slow the GS thread by n microseconds per hardware draw.
+	static const int s_gs_delay_us = [] {
+		const char* env = std::getenv("PS2V_GS_DELAY_US");
+		return env ? std::atoi(env) : 0;
+	}();
+	if (s_gs_delay_us > 0)
+		std::this_thread::sleep_for(std::chrono::microseconds(s_gs_delay_us));
+
 	// PS2V_MV_DIRTY=<hex>: dirty flags to set; bit 31 also forgets the bound pipeline layout. "1" = all.
 	static const u32 s_mv_dirty = [] {
 		const char* env = std::getenv("PS2V_MV_DIRTY");
@@ -10279,6 +10310,11 @@ void GSDeviceVK::DoRenderHW(GSHWDrawConfig& config)
 		ExecuteCommandBuffer(WaitType::Sleep);
 	}
 	m_debug_draw_index++;
+
+	// Experiment (PS2V_MV_ENDPASS): end the render pass after every hardware draw, without submitting.
+	static const bool s_endpass = std::getenv("PS2V_MV_ENDPASS") != nullptr;
+	if (s_endpass)
+		EndRenderPass();
 
 	// Experiment (PS2V_MV_RT_BARRIER): after each draw, take the render target through a transfer
 	// layout and back, as a readback does. "same" instead: a memory barrier without a layout change.
