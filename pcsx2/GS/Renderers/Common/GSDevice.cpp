@@ -811,10 +811,6 @@ GSTexture* GSDevice::FetchSurface(GSTexture::Usage usage, int width, int height,
 	// any of them can be an attachment of a multiview draw.
 	if (layers == 0)
 		layers = GSTexture::IsTexture(usage) ? 1 : m_stereo_layers;
-	// Experiment (PS2V_ALL_LAYERED): every texture gets a layer per eye too.
-	static const bool s_all_layered = std::getenv("PS2V_ALL_LAYERED") != nullptr;
-	if (s_all_layered)
-		layers = m_stereo_layers;
 	layers = std::min(layers, m_stereo_layers);
 
 	// No blanket flush here: what comes back is either brand new or was recycled into the

@@ -5,7 +5,6 @@
 #include "GSTextureReplacements.h"
 #include "GSRendererHW.h"
 #include "GS/GSState.h"
-#include "GS/GSVolumetric.h"
 #include "GS/GSGL.h"
 #include "GS/GSPerfMon.h"
 #include "GS/GSUtil.h"
@@ -5602,12 +5601,6 @@ void GSTextureCache::InvalidateLocalMem(
 
 bool GSTextureCache::Move(u32 SBP, u32 SBW, u32 SPSM, int sx, int sy, u32 DBP, u32 DBW, u32 DPSM, int dx, int dy, int w, int h)
 {
-	if (GSVolumetric::GetStereo().enabled)
-	{
-		static u32 s_reports = 0;
-		if (s_reports++ < 200)
-			Console.WriteLn("TC move: %04x/%d bw %u (%d,%d) -> %04x/%d bw %u (%d,%d) %dx%d", SBP, SPSM, SBW, sx, sy, DBP, DPSM, DBW, dx, dy, w, h);
-	}
 	if (SBP == DBP && SPSM == DPSM && !GSLocalMemory::m_psm[SPSM].depth && ShuffleMove(SBP, SBW, SPSM, sx, sy, dx, dy, w, h))
 		return true;
 
@@ -7827,14 +7820,6 @@ std::shared_ptr<GSTextureCache::Palette> GSTextureCache::LookupPaletteObject(con
 
 void GSTextureCache::Read(Target* t, const GSVector4i& r, bool force_synchronous)
 {
-	if (GSVolumetric::GetStereo().enabled)
-	{
-		static u32 s_reports = 0;
-		if (s_reports++ < 200)
-			Console.WriteLn("TC read: target %04x psm %d %dx%d L%u rect %d,%d-%d,%d dirty %d", static_cast<u32>(t->m_TEX0.TBP0),
-				static_cast<int>(t->m_TEX0.PSM), t->m_texture ? t->m_texture->GetWidth() : 0, t->m_texture ? t->m_texture->GetHeight() : 0,
-				t->m_texture ? t->m_texture->GetArrayLayers() : 0u, r.x, r.y, r.z, r.w, t->m_dirty.empty() ? 0 : 1);
-	}
 	if ((!t->m_dirty.empty() && !t->m_dirty.GetTotalRect(t->m_TEX0, t->m_unscaled_size).rintersect(r).rempty()) || r.width() == 0 || r.height() == 0)
 		return;
 
@@ -8066,13 +8051,6 @@ void GSTextureCache::Read(Target* t, const GSVector4i& r, bool force_synchronous
 
 void GSTextureCache::Read(Source* t, const GSVector4i& r)
 {
-	if (GSVolumetric::GetStereo().enabled)
-	{
-		static u32 s_reports = 0;
-		if (s_reports++ < 200)
-			Console.WriteLn("TC read: source %04x psm %d rect %d,%d-%d,%d", static_cast<u32>(t->m_TEX0.TBP0),
-				static_cast<int>(t->m_TEX0.PSM), r.x, r.y, r.z, r.w);
-	}
 	if (r.rempty())
 		return;
 

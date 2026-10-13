@@ -985,14 +985,14 @@ public:
 
 	// array_view: bind it as an array (all layers), for the MULTIVIEW utility passes drawn inside
 	// multiview TFX render passes; otherwise a layered texture is bound as its layer 0.
+	void SetUtilityTexture(GSTexture* tex, VkSampler sampler, bool array_view = false);
 	void CheckStereoRenderPass(VkRenderPass rp);
 	GSTextureVK* PresentRightEye(VkCommandBuffer cmdbuffer, GSTextureVK* bb);
-	void DebugReadFlushRange();
 	void RestartMultiviewPassForNewConstants();
-	void DebugRebindVertexBuffer();
+	// Debugging: the $PS2V_FLUSH_FILE draw range of DoRenderHW (see there).
+	void DebugReadFlushRange();
 	u32 m_debug_draw_index = 0;
 	static u32 s_debug_flush_first, s_debug_flush_last;
-	void SetUtilityTexture(GSTexture* tex, VkSampler sampler, bool array_view = false);
 
 	// GSVolumetric multiview stereo: TFX shaders declare array samplers.
 	__fi VkImageView GetTFXView(GSTextureVK* tex) { return IsMultiview() ? tex->GetArrayView() : tex->GetView(); }

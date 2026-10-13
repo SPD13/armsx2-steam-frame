@@ -3731,11 +3731,6 @@ void GSDeviceVK::EndPresent()
 				if (current->GetArrayLayers() > 1)
 					current->GetLayerProxyTexture(1)->Save(prefix + "-layer1.png");
 			}
-			if (GSDevice::m_merge)
-				GSDevice::m_merge->GetLayerProxyTexture(0)->Save(prefix + "-merge0.png");
-			Console.WriteLn("Debug: present %s: current %p merge %p weavebob %p blend %p mad %p", prefix.c_str(),
-				static_cast<void*>(m_current), static_cast<void*>(GSDevice::m_merge), static_cast<void*>(m_weavebob),
-				static_cast<void*>(m_blend), static_cast<void*>(m_mad));
 			Console.WriteLn("Debug: present dump %s (current %dx%d, %u layers)", prefix.c_str(),
 				m_current ? m_current->GetWidth() : 0, m_current ? m_current->GetHeight() : 0,
 				m_current ? m_current->GetArrayLayers() : 0u);
@@ -4333,7 +4328,7 @@ void GSDeviceVK::ResolveFeatureTable()
 	// The profile leaves Texture Preloading alone: the user's setting outranks a pool-size heuristic.
 #endif
 	m_features.provoking_vertex_last = m_optional_extensions.vk_ext_provoking_vertex;
-	m_features.vs_expand = !GSConfig.DisableVertexShaderExpand && !std::getenv("PS2V_NO_VSEXPAND"); // env: experiment
+	m_features.vs_expand = !GSConfig.DisableVertexShaderExpand;
 	m_features.sprite_edge_clamp = true;
 
 	if (!m_features.texture_barrier)
@@ -4530,8 +4525,7 @@ void GSDeviceVK::ResolveStreamRingMemory()
 	inputs.type_flags = type_flags;
 	inputs.type_count = memory_properties.memoryTypeCount;
 	inputs.prefer_cached_over_write_combined =
-		UsesMobileDriverWorkaround(DriverWorkaround::PreferCachedStreamRingMemory) ||
-		std::getenv("PS2V_CACHED_RINGS") != nullptr; // experiment
+		UsesMobileDriverWorkaround(DriverWorkaround::PreferCachedStreamRingMemory);
 	m_stream_ring_memory = GSDecideStreamRingMemory(inputs);
 }
 
@@ -4743,7 +4737,6 @@ bool GSDeviceVK::CheckFormatSupport()
 void GSDeviceVK::DrawPrimitive()
 {
 	g_perfmon.Put(GSPerfMon::DrawCalls, 1);
-	DebugRebindVertexBuffer();
 	vkCmdDraw(GetCurrentCommandBuffer(), m_vertex.count, 1, m_vertex.start, 0);
 }
 
@@ -4756,7 +4749,6 @@ void GSDeviceVK::DrawIndexedPrimitive(int offset, int count)
 {
 	pxAssert(offset + count <= (int)m_index.count);
 	g_perfmon.Put(GSPerfMon::DrawCalls, 1);
-	DebugRebindVertexBuffer();
 	vkCmdDrawIndexed(GetCurrentCommandBuffer(), count, 1, m_index.start + offset, m_vertex.start, 0);
 }
 
@@ -5860,21 +5852,6 @@ void GSDeviceVK::OMSetRenderTargets(
 	GSTextureVK* vkRt = static_cast<GSTextureVK*>(rt);
 	GSTextureVK* vkDs = static_cast<GSTextureVK*>(ds);
 
-	// Experiment (PS2V_MV_EAGER_CLEAR): in multiview, run pending clears of per-eye targets now, as
-	// image clears outside any render pass, instead of as a load op or an in-pass attachment clear.
-	static const bool s_eager_clear = std::getenv("PS2V_MV_EAGER_CLEAR") != nullptr;
-	if (s_eager_clear && IsMultiview())
-	{
-		for (GSTextureVK* tex : {vkRt, vkDs})
-		{
-			if (tex && tex->GetArrayLayers() > 1 && tex->GetState() == GSTexture::State::Cleared)
-			{
-				EndRenderPass();
-				tex->CommitClear(GetCurrentCommandBuffer());
-			}
-		}
-	}
-
 	if (m_current_render_target != vkRt || m_current_depth_target != vkDs ||
 		m_current_framebuffer_feedback_loop != feedback_loop ||
 		m_current_framebuffer == VK_NULL_HANDLE)
@@ -6313,17 +6290,6 @@ void GSDeviceVK::FlushStreamRingWrites()
 	m_texture_stream_buffer.FlushPendingWrites();
 }
 
-// Experiment (PS2V_RING_SCALE=n): multiply the uniform and index ring sizes.
-static u32 DebugRingScale()
-{
-	static const u32 s_scale = [] {
-		const char* env = std::getenv("PS2V_RING_SCALE");
-		const int v = env ? std::atoi(env) : 1;
-		return static_cast<u32>(std::clamp(v, 1, 16));
-	}();
-	return s_scale;
-}
-
 bool GSDeviceVK::CreateBuffers()
 {
 	// With vertex expansion the whole ring is bound as one storage buffer, so it cannot outgrow
@@ -6335,9 +6301,6 @@ bool GSDeviceVK::CreateBuffers()
 						  VERTEX_BUFFER_MIN_START_SIZE / 1024, VERTEX_BUFFER_MAX_SIZE / 1024) * 1024;
 	if (g_gs_measurement_overrides.vertex_ring_no_growth)
 		vertex_max_size = vertex_size;
-	// Experiment (PS2V_BIG_VRING): start the vertex ring at its maximum, so it never grows.
-	if (std::getenv("PS2V_BIG_VRING"))
-		vertex_size = vertex_max_size;
 	if (m_features.vs_expand)
 	{
 		vertex_max_size = static_cast<u32>(std::min<u64>(vertex_max_size, m_device_properties.limits.maxStorageBufferRange));
@@ -6354,7 +6317,7 @@ bool GSDeviceVK::CreateBuffers()
 		return false;
 	}
 
-	if (!m_index_stream_buffer.Create(VK_BUFFER_USAGE_INDEX_BUFFER_BIT, INDEX_BUFFER_SIZE * DebugRingScale(), "index"))
+	if (!m_index_stream_buffer.Create(VK_BUFFER_USAGE_INDEX_BUFFER_BIT, INDEX_BUFFER_SIZE, "index"))
 	{
 		Host::ReportErrorAsync("GS", "Failed to allocate index buffer");
 		return false;
@@ -6368,14 +6331,14 @@ bool GSDeviceVK::CreateBuffers()
 	}
 
 	if (!m_vertex_uniform_stream_buffer.Create(
-			VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VERTEX_UNIFORM_BUFFER_SIZE * DebugRingScale(), "vs-uniform"))
+			VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VERTEX_UNIFORM_BUFFER_SIZE, "vs-uniform"))
 	{
 		Host::ReportErrorAsync("GS", "Failed to allocate vertex uniform buffer");
 		return false;
 	}
 
 	if (!m_fragment_uniform_stream_buffer.Create(
-			VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, FRAGMENT_UNIFORM_BUFFER_SIZE * DebugRingScale(), "fs-uniform"))
+			VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, FRAGMENT_UNIFORM_BUFFER_SIZE, "fs-uniform"))
 	{
 		Host::ReportErrorAsync("GS", "Failed to allocate fragment uniform buffer");
 		return false;
@@ -9059,7 +9022,6 @@ bool GSDeviceVK::InRenderPass()
 
 void GSDeviceVK::CheckStereoRenderPass(VkRenderPass rp)
 {
-
 	// GSVolumetric multiview stereo: a per-eye target must be drawn by a multiview pass (its
 	// framebuffer was made for one) and a single-layer one by a single-view pass. A mismatch is a
 	// path that still needs a per-layer loop.
@@ -9182,18 +9144,6 @@ void GSDeviceVK::SetPipeline(VkPipeline pipeline)
 
 	m_current_pipeline = pipeline;
 	m_dirty_flags |= DIRTY_FLAG_PIPELINE;
-}
-
-void GSDeviceVK::DebugRebindVertexBuffer()
-{
-	// Experiment (PS2V_MV_REBIND): bind the vertex ring before every draw in multiview.
-	static const bool s_rebind = std::getenv("PS2V_MV_REBIND") != nullptr;
-	if (!s_rebind || !IsMultiview())
-		return;
-	VkBuffer buffer = *m_vertex_stream_buffer.GetBufferPtr();
-	constexpr VkDeviceSize buffer_offset = 0;
-	if (buffer != VK_NULL_HANDLE)
-		vkCmdBindVertexBuffers(GetCurrentCommandBuffer(), 0, 1, &buffer, &buffer_offset);
 }
 
 void GSDeviceVK::SetInitialState(VkCommandBuffer cmdbuf)
@@ -9662,32 +9612,6 @@ bool GSDeviceVK::DateCopyLive(const GSHWDrawConfig& config)
 
 void GSDeviceVK::DoRenderHW(GSHWDrawConfig& config)
 {
-	// Experiment (PS2V_MV_DIRTY): rebind all draw state for every hardware draw in multiview.
-	// Experiment (PS2V_GS_DELAY_US=n): slow the GS thread by n microseconds per hardware draw.
-	static const int s_gs_delay_us = [] {
-		const char* env = std::getenv("PS2V_GS_DELAY_US");
-		return env ? std::atoi(env) : 0;
-	}();
-	if (s_gs_delay_us > 0)
-		std::this_thread::sleep_for(std::chrono::microseconds(s_gs_delay_us));
-
-	// PS2V_MV_DIRTY=<hex>: dirty flags to set; bit 31 also forgets the bound pipeline layout. "1" = all.
-	static const u32 s_mv_dirty = [] {
-		const char* env = std::getenv("PS2V_MV_DIRTY");
-		if (!env)
-			return 0u;
-		if (!std::strcmp(env, "1"))
-			return 0x80000000u | static_cast<u32>(ALL_DIRTY_STATE);
-		return static_cast<u32>(std::strtoul(env, nullptr, 16));
-	}();
-	if (s_mv_dirty && IsMultiview())
-	{
-		if (s_mv_dirty & 0x80000000u)
-			m_current_pipeline_layout = PipelineLayout::Undefined;
-		m_dirty_flags |= (s_mv_dirty & 0x7FFFFFFFu);
-	}
-
-
 	// Mid-frame kick (see m_render_passes_since_submit in the header): while a
 	// readback-prone frame is recording, submit the work recorded so far once enough of it has
 	// piled up, so the GPU executes it while the GS thread records the rest instead of starting
@@ -10300,7 +10224,7 @@ void GSDeviceVK::DoRenderHW(GSHWDrawConfig& config)
 
 	config.colclip_mode = GSHWDrawConfig::ColClipMode::NoModify;
 
-	// Debugging (bisection of the multiview race): after the hardware draws of a frame whose index is
+	// Debugging (bisecting GPU ordering bugs, see docs/m3-multiview.md): after the hardware draws of a frame whose index is
 	// in [first, last), end the pass and wait for the GPU. The range comes from the file
 	// $PS2V_FLUSH_FILE ("first last"), read once per frame.
 	if (s_debug_flush_first < s_debug_flush_last && m_debug_draw_index >= s_debug_flush_first &&
@@ -10310,30 +10234,6 @@ void GSDeviceVK::DoRenderHW(GSHWDrawConfig& config)
 		ExecuteCommandBuffer(WaitType::Sleep);
 	}
 	m_debug_draw_index++;
-
-	// Experiment (PS2V_MV_ENDPASS): end the render pass after every hardware draw, without submitting.
-	static const bool s_endpass = std::getenv("PS2V_MV_ENDPASS") != nullptr;
-	if (s_endpass)
-		EndRenderPass();
-
-	// Experiment (PS2V_MV_RT_BARRIER): after each draw, take the render target through a transfer
-	// layout and back, as a readback does. "same" instead: a memory barrier without a layout change.
-	static const char* s_rt_barrier = std::getenv("PS2V_MV_RT_BARRIER");
-	if (s_rt_barrier && IsMultiview() && config.rt)
-	{
-		GSTextureVK* rt = static_cast<GSTextureVK*>(config.rt);
-		EndRenderPass();
-		const GSTextureVK::Layout old_layout = rt->GetLayout();
-		if (!std::strcmp(s_rt_barrier, "same"))
-		{
-			rt->TransitionSubresourcesToLayout(GetCurrentCommandBuffer(), 0, 1, old_layout, old_layout);
-		}
-		else if (old_layout != GSTextureVK::Layout::Undefined && old_layout != GSTextureVK::Layout::TransferSrc)
-		{
-			rt->TransitionSubresourcesToLayout(GetCurrentCommandBuffer(), 0, 1, old_layout, GSTextureVK::Layout::TransferSrc);
-			rt->TransitionSubresourcesToLayout(GetCurrentCommandBuffer(), 0, 1, GSTextureVK::Layout::TransferSrc, old_layout);
-		}
-	}
 }
 
 void GSDeviceVK::UpdateHWPipelineSelector(GSHWDrawConfig& config, PipelineSelector& pipe)

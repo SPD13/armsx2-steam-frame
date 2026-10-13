@@ -24,7 +24,6 @@ GSVector4 GSVolumetricEyeShift(int eye); // GSRenderer.cpp
 #include "GS/GSUtil.h"
 #include "Host.h"
 #include "common/Console.h"
-#include "common/Timer.h"
 #include "common/BitUtils.h"
 #include "common/StringUtil.h"
 #include <bit>
@@ -6008,39 +6007,8 @@ void GSRendererHW::Draw()
 	//
 	const GSVector4i real_rect = m_r;
 
-	// Stereo diagnostics: how the paletted background textures of Time Crisis II's problem scene
-	// resolve (once per texture and outcome every 5 s).
-	if (GSVolumetric::GetStereo().enabled && PRIM->TME &&
-		(m_cached_ctx.TEX0.TBP0 == 0x300e || m_cached_ctx.TEX0.TBP0 == 0x1a20))
-	{
-		static u64 s_next[2];
-		const int idx = (m_cached_ctx.TEX0.TBP0 == 0x300e) ? 0 : 1;
-		const u64 now = Common::Timer::GetCurrentValue();
-		if (now >= s_next[idx])
-		{
-			s_next[idx] = now + static_cast<u64>(Common::Timer::ConvertSecondsToValue(5.0));
-			Console.WriteLn("Stereo bg: tex %04x psm %d tw %d th %d cpsm %d skip %d process %d src %s target %d direct %d from_target %04x "
-							"srctex %dx%d layers %u fmt %u stereo %d palette %s pal_layers %u rt %04x rtlayers %u",
-				static_cast<u32>(m_cached_ctx.TEX0.TBP0), static_cast<int>(m_cached_ctx.TEX0.PSM),
-				static_cast<int>(m_cached_ctx.TEX0.TW), static_cast<int>(m_cached_ctx.TEX0.TH),
-				static_cast<int>(m_cached_ctx.TEX0.CPSM), skip_draw ? 1 : 0, m_process_texture ? 1 : 0, src ? "yes" : "no",
-				src ? static_cast<int>(src->m_target) : -1, src ? static_cast<int>(src->m_target_direct) : -1,
-				(src && src->m_from_target) ? static_cast<u32>(src->m_from_target->m_TEX0.TBP0) : 0xFFFFu,
-				(src && src->m_texture) ? src->m_texture->GetWidth() : 0, (src && src->m_texture) ? src->m_texture->GetHeight() : 0,
-				(src && src->m_texture) ? src->m_texture->GetArrayLayers() : 0u,
-				(src && src->m_texture) ? static_cast<u32>(src->m_texture->GetFormat()) : 0u,
-				(src && src->m_texture) ? static_cast<int>(src->m_texture->HasStereoContent()) : -1,
-				(src && src->m_palette) ? "yes" : "no", (src && src->m_palette) ? src->m_palette->GetArrayLayers() : 0u,
-				rt ? static_cast<u32>(rt->m_TEX0.TBP0) : 0xFFFFu, (rt && rt->m_texture) ? rt->m_texture->GetArrayLayers() : 0u);
-		}
-	}
-
 	if (GSVolumetric::DrawTraceActive())
 	{
-		Console.WriteLn("Draw objs: rt %p ds %p (%dx%d L%u) src %p", rt ? static_cast<const void*>(rt->m_texture) : nullptr,
-			ds ? static_cast<const void*>(ds->m_texture) : nullptr, (ds && ds->m_texture) ? ds->m_texture->GetWidth() : 0,
-			(ds && ds->m_texture) ? ds->m_texture->GetHeight() : 0, (ds && ds->m_texture) ? ds->m_texture->GetArrayLayers() : 0u,
-			(src && src->m_texture) ? static_cast<const void*>(src->m_texture) : nullptr);
 		Console.WriteLn("Draw: %s rt %04x/%d %dx%d L%u ds %04x tex %s %04x/%d tw %d th %d tbw %d src %s target %d direct %d from %04x %dx%d L%u stereo %d prim %d verts %u fst %d bbox %.0f,%.0f-%.0f,%.0f",
 			skip_draw ? "SKIP" : "draw", rt ? static_cast<u32>(rt->m_TEX0.TBP0) : 0xFFFFu, rt ? static_cast<int>(rt->m_TEX0.PSM) : -1,
 			(rt && rt->m_texture) ? rt->m_texture->GetWidth() : 0, (rt && rt->m_texture) ? rt->m_texture->GetHeight() : 0,
@@ -6058,23 +6026,6 @@ void GSRendererHW::Draw()
 
 	if (!skip_draw)
 		DrawPrims(rt, ds, src, tmm);
-
-	// Draw trace with PS2V_TRACE_SRC set: each source texture once (layer 0), with its object address.
-	if (GSVolumetric::DrawTraceActive() && src && src->m_texture)
-	{
-		static const char* s_src_dir = std::getenv("PS2V_TRACE_SRC");
-		static std::vector<const GSTexture*> s_saved;
-		static u32 s_trace_frame = 0;
-		if (s_src_dir && std::find(s_saved.begin(), s_saved.end(), src->m_texture) == s_saved.end() && s_saved.size() < 300)
-		{
-			s_saved.push_back(src->m_texture);
-			g_gs_device->FlushBeforeReadback();
-			src->m_texture->Save(fmt::format("{}/src-{:04x}-psm{}-{}x{}-L{}-{}.png", s_src_dir,
-				static_cast<u32>(m_cached_ctx.TEX0.TBP0), static_cast<int>(m_cached_ctx.TEX0.PSM), src->m_texture->GetWidth(),
-				src->m_texture->GetHeight(), src->m_texture->GetArrayLayers(), static_cast<const void*>(src->m_texture)));
-		}
-		(void)s_trace_frame;
-	}
 
 	// Draw trace with PS2V_TRACE_SAVE set: the render target after every draw of the traced frame.
 	if (GSVolumetric::DrawTraceActive() && !skip_draw && rt && rt->m_texture)
@@ -6097,7 +6048,6 @@ void GSRendererHW::Draw()
 			target->Save(fmt::format("{}/t{}-draw{:03d}-{:04x}.png", s_save_dir, s_trace, index, static_cast<u32>(rt->m_TEX0.TBP0)));
 		}
 	}
-
 
 	// Temporary source *must* be invalidated before normal, because otherwise it'll be double freed.
 	g_texture_cache->InvalidateTemporarySource();
@@ -7441,20 +7391,6 @@ void GSRendererHW::DetermineVSConfig(GSTextureCache::Target* rt, float rtscale, 
 		// What this draw leaves in the target: its own parallax, or the stereo picture it re-reads.
 		const bool marks =
 			(!hud_at_max_depth && !m_stereo_screen_space && !PRIM->FST && m_stereo_display_target) || m_stereo_source;
-		if (marks && !rt->m_texture->HasStereoContent())
-		{
-			static std::vector<u32> s_reported;
-			const u32 key = static_cast<u32>(rt->m_TEX0.TBP0) | (m_stereo_source ? 0x10000u : 0u);
-			if (std::find(s_reported.begin(), s_reported.end(), key) == s_reported.end() && s_reported.size() < 64)
-			{
-				s_reported.push_back(key);
-				Console.WriteLn("Stereo mark: rt %04x/%d %dx%d by %s draw prim %d verts %u tex %04x z %.0f..%.0f q %.3f..%.3f bbox %.0f,%.0f-%.0f,%.0f",
-					static_cast<u32>(rt->m_TEX0.TBP0), static_cast<int>(rt->m_TEX0.PSM), rt->m_texture->GetWidth(),
-					rt->m_texture->GetHeight(), m_stereo_source ? "stereo-source" : "shifted", static_cast<int>(m_vt.m_primclass),
-					m_vertex->next, m_process_texture ? static_cast<u32>(m_cached_ctx.TEX0.TBP0) : 0xFFFFu, m_vt.m_min.p.z,
-					m_vt.m_max.p.z, m_vt.m_min.t.z, m_vt.m_max.t.z, m_vt.m_min.p.x, m_vt.m_min.p.y, m_vt.m_max.p.x, m_vt.m_max.p.y);
-			}
-		}
 		if (marks)
 			rt->m_texture->SetStereoContent(true);
 	}
@@ -11663,57 +11599,6 @@ __ri void GSRendererHW::DrawPrims(GSTextureCache::Target* rt, GSTextureCache::Ta
 	}
 	m_stereo_display_target = rt && std::find(m_stereo_display_bp.begin(), m_stereo_display_bp.end(),
 										 static_cast<u32>(rt->m_TEX0.TBP0)) != m_stereo_display_bp.end();
-
-	// Stereo diagnostics: every 5 s, how the draws were classified, with a few examples of the
-	// non-FST draws pinned for texturing from a target.
-	if (GSVolumetric::GetStereo().enabled)
-	{
-		static u32 s_total, s_fst, s_pin_target, s_pin_q1, s_pin_target_eqz, s_examples;
-		static u64 s_next_log;
-		s_total++;
-		if (PRIM->FST)
-			s_fst++;
-		else if (stereo_source)
-		{
-			s_pin_target++;
-			if (m_vt.m_eq.z)
-				s_pin_target_eqz++;
-			if (s_examples < 6)
-			{
-				s_examples++;
-				Console.WriteLn("Stereo pin: stereo-source draw prim %d verts %u tex %04x/%d (target %04x) rt %04x z %.0f..%.0f q %.3f..%.3f "
-								"bbox %.0f,%.0f-%.0f,%.0f zwrite %d",
-					static_cast<int>(m_vt.m_primclass), m_vertex->next, static_cast<u32>(m_cached_ctx.TEX0.TBP0),
-					static_cast<int>(m_cached_ctx.TEX0.PSM), tex->m_from_target ? static_cast<u32>(tex->m_from_target->m_TEX0.TBP0) : 0xFFFFu,
-					rt ? static_cast<u32>(rt->m_TEX0.TBP0) : 0xFFFFu, m_vt.m_min.p.z, m_vt.m_max.p.z, m_vt.m_min.t.z, m_vt.m_max.t.z,
-					m_vt.m_min.p.x, m_vt.m_min.p.y, m_vt.m_max.p.x, m_vt.m_max.p.y, m_cached_ctx.ZBUF.ZMSK ? 0 : 1);
-			}
-		}
-		else if (m_stereo_screen_space)
-		{
-			s_pin_q1++;
-			if (s_examples < 12)
-			{
-				s_examples++;
-				Console.WriteLn("Stereo pin: Q=1 draw prim %d verts %u tex %04x/%d %s rt %04x z %.0f..%.0f eqz %d bbox %.0f,%.0f-%.0f,%.0f "
-								"zwrite %d zte %d abe %d",
-					static_cast<int>(m_vt.m_primclass), m_vertex->next, static_cast<u32>(m_cached_ctx.TEX0.TBP0),
-					static_cast<int>(m_cached_ctx.TEX0.PSM), tex ? "src" : "none", rt ? static_cast<u32>(rt->m_TEX0.TBP0) : 0xFFFFu,
-					m_vt.m_min.p.z, m_vt.m_max.p.z, m_vt.m_eq.z ? 1 : 0, m_vt.m_min.p.x, m_vt.m_min.p.y, m_vt.m_max.p.x,
-					m_vt.m_max.p.y, m_cached_ctx.ZBUF.ZMSK ? 0 : 1, static_cast<int>(m_cached_ctx.TEST.ZTE),
-					static_cast<int>(PRIM->ABE));
-			}
-		}
-		const u64 now = Common::Timer::GetCurrentValue();
-		if (now >= s_next_log)
-		{
-			if (s_next_log)
-				Console.WriteLn("Stereo draws: %u total, %u FST, %u non-FST pinned (stereo texture; %u at one Z), %u pinned (Q=1)",
-					s_total, s_fst, s_pin_target, s_pin_target_eqz, s_pin_q1);
-			s_total = s_fst = s_pin_target = s_pin_q1 = s_pin_target_eqz = s_examples = 0;
-			s_next_log = now + static_cast<u64>(Common::Timer::ConvertSecondsToValue(5.0));
-		}
-	}
 
 	// Vertex shader config
 	float vs_scale_x, vs_scale_y;
