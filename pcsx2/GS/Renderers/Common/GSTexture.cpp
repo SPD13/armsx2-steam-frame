@@ -376,3 +376,19 @@ bool GSDownloadTexture::ReadTexels(const GSVector4i& rc, void* out_ptr, u32 out_
 	StringUtil::StrideMemCpy(out_ptr, out_stride, m_map_pointer + copy_offset, m_current_pitch, copy_size, copy_rows);
 	return true;
 }
+
+void GSTexture::AddStereoContentFrom(const GSTexture* src)
+{
+	if (!src || !src->m_stereo_content || m_stereo_content)
+		return;
+	m_stereo_content = true;
+	static std::vector<u64> s_reported;
+	const u64 key = (static_cast<u64>(m_size.x) << 48) | (static_cast<u64>(m_size.y) << 32) |
+					(static_cast<u64>(src->m_size.x) << 16) | static_cast<u64>(src->m_size.y);
+	if (std::find(s_reported.begin(), s_reported.end(), key) == s_reported.end() && s_reported.size() < 64)
+	{
+		s_reported.push_back(key);
+		Console.WriteLn("Stereo mark: %dx%d (format %u) copied from a stereo %dx%d (format %u)", m_size.x, m_size.y,
+			static_cast<u32>(m_format), src->m_size.x, src->m_size.y, static_cast<u32>(src->m_format));
+	}
+}

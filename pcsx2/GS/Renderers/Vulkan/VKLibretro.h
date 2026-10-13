@@ -90,6 +90,10 @@ namespace VKLibretro
 		VkImageView live_depth_view = VK_NULL_HANDLE;
 		// Geometric stereo prototype: 0 = this frame was drawn for the left eye, 1 = right, -1 = mono.
 		int stereo_eye = -1;
+		// Multiview stereo: image above is the left eye, this one (same size, format and layout) the
+		// right. Null without multiview stereo.
+		VkImage right_image = VK_NULL_HANDLE;
+		VkImageView right_view = VK_NULL_HANDLE;
 	};
 	void PublishFrame(const Frame& frame);
 	bool ConsumeFrame(Frame* out_frame); // true if a new frame arrived since the last consume

@@ -1772,6 +1772,16 @@ protected:
 	bool AcquireWindow(bool recreate_window);
 
 	virtual GSTexture* CreateSurface(GSTexture::Usage usage, int width, int height, int levels, GSTexture::Format format) = 0;
+	// GSVolumetric stereo: a texture with one array layer per eye. Only backends that set
+	// m_stereo_layers implement it.
+	virtual GSTexture* CreateLayeredSurface(GSTexture::Usage usage, int width, int height, int levels, GSTexture::Format format, u32 layers)
+	{
+		return (layers == 1) ? CreateSurface(usage, width, height, levels, format) : nullptr;
+	}
+
+	// GSVolumetric multiview stereo: 2 when every render target and depth buffer has a layer per
+	// eye and hardware draws render both (set by the backend at creation), else 1.
+	u32 m_stereo_layers = 1;
 
 	virtual void DoMerge(GSTexture* sTex[3], GSVector4* sRect, GSTexture* dTex, GSVector4* dRect, const MergeTopBand* top_band, const GSRegPMODE& PMODE, const GSRegEXTBUF& EXTBUF, u32 c, const Filter filter) = 0;
 	virtual void DoInterlace(GSTexture* sTex, const GSVector4& sRect, GSTexture* dTex, const GSVector4& dRect, ShaderInterlace shader, Filter filter, const InterlaceConstantBuffer& cb) = 0;
@@ -1873,6 +1883,8 @@ public:
 	const std::string& GetName() const { return m_name; }
 
 	GSTexture* GetColorClipTexture() const { return m_colclip_rt; }
+
+	__fi u32 GetStereoLayers() const { return m_stereo_layers; }
 		
 	void SetColorClipTexture(GSTexture* tex) { m_colclip_rt = tex; }
 
@@ -2119,8 +2131,9 @@ public:
 
 	GSTexture::Usage GetDepthStencilUsage() const;
 
-	GSTexture* FetchSurface(GSTexture::Usage usage, int width, int height, int levels, GSTexture::Format format, bool clear, bool prefer_reuse);
-	GSTexture* FetchSurface(GSTexture::Usage usage, const GSVector2i& size, int levels, GSTexture::Format format, bool clear, bool prefer_reuse);
+	// layers 0: the stereo layer count for render targets and depth buffers, 1 for textures.
+	GSTexture* FetchSurface(GSTexture::Usage usage, int width, int height, int levels, GSTexture::Format format, bool clear, bool prefer_reuse, u32 layers = 0);
+	GSTexture* FetchSurface(GSTexture::Usage usage, const GSVector2i& size, int levels, GSTexture::Format format, bool clear, bool prefer_reuse, u32 layers = 0);
 	GSTexture* CreateRenderTarget(int w, int h, GSTexture::Format format, bool clear = true, bool prefer_reuse = true);
 	GSTexture* CreateRenderTarget(const GSVector2i& size, GSTexture::Format format, bool clear = true, bool prefer_reuse = true);
 	GSTexture* CreateFeedbackTarget(int w, int h, GSTexture::Format format, bool clear = true, bool prefer_reuse = true);
@@ -2129,7 +2142,7 @@ public:
 	GSTexture* CreateShaderWriteTarget(const GSVector2i& size, GSTexture::Format format, bool clear = true, bool prefer_reuse = true);
 	GSTexture* CreateDepthStencil(int w, int h, bool clear = true, bool prefer_reuse = true);
 	GSTexture* CreateDepthStencil(const GSVector2i& size, bool clear = true, bool prefer_reuse = true);
-	GSTexture* CreateTexture(int w, int h, int mipmap_levels, GSTexture::Format format, bool prefer_reuse = false);
+	GSTexture* CreateTexture(int w, int h, int mipmap_levels, GSTexture::Format format, bool prefer_reuse = false, u32 layers = 1);
 	GSTexture* CreateTexture(const GSVector2i& size, int mipmap_levels, GSTexture::Format format, bool prefer_reuse = false);
 	GSTexture* CreateCompatible(GSTexture* tex, bool clear = true, bool prefer_reuse = true);
 	GSTexture* CreateCompatible(GSTexture* tex, const GSVector2i& size, bool clear = true, bool prefer_reuse = true);

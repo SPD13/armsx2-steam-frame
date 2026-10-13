@@ -24,6 +24,7 @@ GSVector4 GSVolumetricEyeShift(int eye); // GSRenderer.cpp
 #include "GS/GSUtil.h"
 #include "Host.h"
 #include "common/Console.h"
+#include "common/Timer.h"
 #include "common/BitUtils.h"
 #include "common/StringUtil.h"
 #include <bit>
@@ -6007,8 +6008,95 @@ void GSRendererHW::Draw()
 	//
 	const GSVector4i real_rect = m_r;
 
+	// Stereo diagnostics: how the paletted background textures of Time Crisis II's problem scene
+	// resolve (once per texture and outcome every 5 s).
+	if (GSVolumetric::GetStereo().enabled && PRIM->TME &&
+		(m_cached_ctx.TEX0.TBP0 == 0x300e || m_cached_ctx.TEX0.TBP0 == 0x1a20))
+	{
+		static u64 s_next[2];
+		const int idx = (m_cached_ctx.TEX0.TBP0 == 0x300e) ? 0 : 1;
+		const u64 now = Common::Timer::GetCurrentValue();
+		if (now >= s_next[idx])
+		{
+			s_next[idx] = now + static_cast<u64>(Common::Timer::ConvertSecondsToValue(5.0));
+			Console.WriteLn("Stereo bg: tex %04x psm %d tw %d th %d cpsm %d skip %d process %d src %s target %d direct %d from_target %04x "
+							"srctex %dx%d layers %u fmt %u stereo %d palette %s pal_layers %u rt %04x rtlayers %u",
+				static_cast<u32>(m_cached_ctx.TEX0.TBP0), static_cast<int>(m_cached_ctx.TEX0.PSM),
+				static_cast<int>(m_cached_ctx.TEX0.TW), static_cast<int>(m_cached_ctx.TEX0.TH),
+				static_cast<int>(m_cached_ctx.TEX0.CPSM), skip_draw ? 1 : 0, m_process_texture ? 1 : 0, src ? "yes" : "no",
+				src ? static_cast<int>(src->m_target) : -1, src ? static_cast<int>(src->m_target_direct) : -1,
+				(src && src->m_from_target) ? static_cast<u32>(src->m_from_target->m_TEX0.TBP0) : 0xFFFFu,
+				(src && src->m_texture) ? src->m_texture->GetWidth() : 0, (src && src->m_texture) ? src->m_texture->GetHeight() : 0,
+				(src && src->m_texture) ? src->m_texture->GetArrayLayers() : 0u,
+				(src && src->m_texture) ? static_cast<u32>(src->m_texture->GetFormat()) : 0u,
+				(src && src->m_texture) ? static_cast<int>(src->m_texture->HasStereoContent()) : -1,
+				(src && src->m_palette) ? "yes" : "no", (src && src->m_palette) ? src->m_palette->GetArrayLayers() : 0u,
+				rt ? static_cast<u32>(rt->m_TEX0.TBP0) : 0xFFFFu, (rt && rt->m_texture) ? rt->m_texture->GetArrayLayers() : 0u);
+		}
+	}
+
+	if (GSVolumetric::DrawTraceActive())
+	{
+		Console.WriteLn("Draw objs: rt %p ds %p (%dx%d L%u) src %p", rt ? static_cast<const void*>(rt->m_texture) : nullptr,
+			ds ? static_cast<const void*>(ds->m_texture) : nullptr, (ds && ds->m_texture) ? ds->m_texture->GetWidth() : 0,
+			(ds && ds->m_texture) ? ds->m_texture->GetHeight() : 0, (ds && ds->m_texture) ? ds->m_texture->GetArrayLayers() : 0u,
+			(src && src->m_texture) ? static_cast<const void*>(src->m_texture) : nullptr);
+		Console.WriteLn("Draw: %s rt %04x/%d %dx%d L%u ds %04x tex %s %04x/%d tw %d th %d tbw %d src %s target %d direct %d from %04x %dx%d L%u stereo %d prim %d verts %u fst %d bbox %.0f,%.0f-%.0f,%.0f",
+			skip_draw ? "SKIP" : "draw", rt ? static_cast<u32>(rt->m_TEX0.TBP0) : 0xFFFFu, rt ? static_cast<int>(rt->m_TEX0.PSM) : -1,
+			(rt && rt->m_texture) ? rt->m_texture->GetWidth() : 0, (rt && rt->m_texture) ? rt->m_texture->GetHeight() : 0,
+			(rt && rt->m_texture) ? rt->m_texture->GetArrayLayers() : 0u, ds ? static_cast<u32>(ds->m_TEX0.TBP0) : 0xFFFFu,
+			PRIM->TME ? "on" : "off", static_cast<u32>(m_cached_ctx.TEX0.TBP0), static_cast<int>(m_cached_ctx.TEX0.PSM),
+			1 << m_cached_ctx.TEX0.TW, 1 << m_cached_ctx.TEX0.TH, static_cast<int>(m_cached_ctx.TEX0.TBW),
+			src ? "yes" : "no", src ? static_cast<int>(src->m_target) : -1, src ? static_cast<int>(src->m_target_direct) : -1,
+			(src && src->m_from_target) ? static_cast<u32>(src->m_from_target->m_TEX0.TBP0) : 0xFFFFu,
+			(src && src->m_texture) ? src->m_texture->GetWidth() : 0, (src && src->m_texture) ? src->m_texture->GetHeight() : 0,
+			(src && src->m_texture) ? src->m_texture->GetArrayLayers() : 0u,
+			(src && src->m_texture) ? static_cast<int>(src->m_texture->HasStereoContent()) : -1,
+			static_cast<int>(m_vt.m_primclass), m_vertex->next, PRIM->FST ? 1 : 0,
+			m_vt.m_min.p.x, m_vt.m_min.p.y, m_vt.m_max.p.x, m_vt.m_max.p.y);
+	}
+
 	if (!skip_draw)
 		DrawPrims(rt, ds, src, tmm);
+
+	// Draw trace with PS2V_TRACE_SRC set: each source texture once (layer 0), with its object address.
+	if (GSVolumetric::DrawTraceActive() && src && src->m_texture)
+	{
+		static const char* s_src_dir = std::getenv("PS2V_TRACE_SRC");
+		static std::vector<const GSTexture*> s_saved;
+		static u32 s_trace_frame = 0;
+		if (s_src_dir && std::find(s_saved.begin(), s_saved.end(), src->m_texture) == s_saved.end() && s_saved.size() < 300)
+		{
+			s_saved.push_back(src->m_texture);
+			g_gs_device->FlushBeforeReadback();
+			src->m_texture->Save(fmt::format("{}/src-{:04x}-psm{}-{}x{}-L{}-{}.png", s_src_dir,
+				static_cast<u32>(m_cached_ctx.TEX0.TBP0), static_cast<int>(m_cached_ctx.TEX0.PSM), src->m_texture->GetWidth(),
+				src->m_texture->GetHeight(), src->m_texture->GetArrayLayers(), static_cast<const void*>(src->m_texture)));
+		}
+		(void)s_trace_frame;
+	}
+
+	// Draw trace with PS2V_TRACE_SAVE set: the render target after every draw of the traced frame.
+	if (GSVolumetric::DrawTraceActive() && !skip_draw && rt && rt->m_texture)
+	{
+		static const char* s_save_dir = std::getenv("PS2V_TRACE_SAVE");
+		static const bool s_save_ds = std::getenv("PS2V_TRACE_SAVE_DS") != nullptr;
+		static const char* s_every_env = std::getenv("PS2V_TRACE_SAVE_EVERY");
+		static const u32 s_every = s_every_env ? static_cast<u32>(std::atoi(s_every_env)) : 1;
+		static u32 s_trace = 0, s_index = 0;
+		if (s_trace != GSVolumetric::DrawTraceNumber())
+		{
+			s_trace = GSVolumetric::DrawTraceNumber();
+			s_index = 0;
+		}
+		const u32 index = s_index++;
+		if (s_save_dir && (s_every <= 1 || (index % s_every) == s_every - 1))
+		{
+			g_gs_device->FlushBeforeReadback();
+			GSTexture* target = (s_save_ds && ds && ds->m_texture) ? ds->m_texture : rt->m_texture;
+			target->Save(fmt::format("{}/t{}-draw{:03d}-{:04x}.png", s_save_dir, s_trace, index, static_cast<u32>(rt->m_TEX0.TBP0)));
+		}
+	}
 
 
 	// Temporary source *must* be invalidated before normal, because otherwise it'll be double freed.
@@ -7348,11 +7436,38 @@ void GSRendererHW::DetermineVSConfig(GSTextureCache::Target* rt, float rtscale, 
 	// II draws its whole HUD that way, with ordinary texture coordinates): no shift, on the screen.
 	const u64 z_format_max = (1ull << GSLocalMemory::m_psm[m_cached_ctx.ZBUF.PSM].trbpp) - 1;
 	const bool hud_at_max_depth = m_vt.m_eq.z && m_vt.m_min.p.z >= static_cast<float>(z_format_max);
-	if (stereo.enabled && !hud_at_max_depth)
+	if (stereo.enabled && rt && rt->m_texture)
 	{
-		const GSVector4 shift = GSVolumetricEyeShift(GSVolumetric::CurrentEye());
+		// What this draw leaves in the target: its own parallax, or the stereo picture it re-reads.
+		const bool marks =
+			(!hud_at_max_depth && !m_stereo_screen_space && !PRIM->FST && m_stereo_display_target) || m_stereo_source;
+		if (marks && !rt->m_texture->HasStereoContent())
+		{
+			static std::vector<u32> s_reported;
+			const u32 key = static_cast<u32>(rt->m_TEX0.TBP0) | (m_stereo_source ? 0x10000u : 0u);
+			if (std::find(s_reported.begin(), s_reported.end(), key) == s_reported.end() && s_reported.size() < 64)
+			{
+				s_reported.push_back(key);
+				Console.WriteLn("Stereo mark: rt %04x/%d %dx%d by %s draw prim %d verts %u tex %04x z %.0f..%.0f q %.3f..%.3f bbox %.0f,%.0f-%.0f,%.0f",
+					static_cast<u32>(rt->m_TEX0.TBP0), static_cast<int>(rt->m_TEX0.PSM), rt->m_texture->GetWidth(),
+					rt->m_texture->GetHeight(), m_stereo_source ? "stereo-source" : "shifted", static_cast<int>(m_vt.m_primclass),
+					m_vertex->next, m_process_texture ? static_cast<u32>(m_cached_ctx.TEX0.TBP0) : 0xFFFFu, m_vt.m_min.p.z,
+					m_vt.m_max.p.z, m_vt.m_min.t.z, m_vt.m_max.t.z, m_vt.m_min.p.x, m_vt.m_min.p.y, m_vt.m_max.p.x, m_vt.m_max.p.y);
+			}
+		}
+		if (marks)
+			rt->m_texture->SetStereoContent(true);
+	}
+	if (stereo.enabled && !hud_at_max_depth && !m_stereo_screen_space && m_stereo_display_target)
+	{
+		// Multiview draws both eyes at once: x/y of vr_stereo for the left (view 0), y/z of
+		// vr_stereo2 for the right. Otherwise vr_stereo carries this frame's eye.
+		const bool multiview = g_gs_device->GetStereoLayers() > 1;
+		const GSVector4 shift = GSVolumetricEyeShift(multiview ? 0 : GSVolumetric::CurrentEye());
+		const GSVector4 shift_right = multiview ? GSVolumetricEyeShift(1) : GSVector4::zero();
 		m_conf.cb_vs.vr_stereo = GSVector4(shift.x, shift.y, stereo.convergence, stereo.z_mode ? 1.0f : 0.0f);
-		m_conf.cb_vs.vr_stereo2 = GSVector4(4294967296.0f / static_cast<float>(z_format_max), 0.0f, 0.0f, 0.0f);
+		m_conf.cb_vs.vr_stereo2 =
+			GSVector4(4294967296.0f / static_cast<float>(z_format_max), shift_right.x, shift_right.y, 0.0f);
 	}
 	else
 	{
@@ -11512,6 +11627,94 @@ __ri void GSRendererHW::DrawPrims(GSTextureCache::Target* rt, GSTextureCache::Ta
 	const float texscale = tex ? tex->GetScale() : 0.0f;
 	const GSVector2i texsize = tex ? tex->GetTexture()->GetSize() : GSVector2i(0, 0);
 
+	// GSVolumetric stereo: a draw that textures from a picture already drawn with each eye's
+	// parallax (a copy, blend or post effect over it) is not shifted again, or the parallax would be
+	// applied twice and smear the picture over itself. Nor is a flat textured draw with Q exactly 1,
+	// a 2D quad given 3D coordinates. A texture holding the same picture in both layers is an
+	// ordinary texture, wherever the texture cache keeps it: Time Crisis II textures its scene from
+	// an area the cache holds as a target, and draws its transparent scenery with Q = 1.
+	const bool stereo_source = tex && tex->m_texture && tex->m_texture->HasStereoContent();
+	m_stereo_source = stereo_source;
+	m_stereo_screen_space = stereo_source ||
+		((m_vt.m_primclass == GS_SPRITE_CLASS || m_vt.m_eq.z) && m_process_texture && !PRIM->FST && m_vt.m_eq.q &&
+			m_vt.m_min.t.z == 1.0f);
+	// An untextured fill across the whole width (a background colour or clear at the far plane)
+	// moved by the parallax would leave a strip of stale picture along one edge.
+	if (!m_process_texture && (m_vt.m_primclass == GS_SPRITE_CLASS || m_vt.m_eq.z) && rt &&
+		(m_vt.m_max.p.x - m_vt.m_min.p.x) >= 0.95f * static_cast<float>(rt->GetUnscaledSize().x))
+	{
+		m_stereo_screen_space = true;
+	}
+
+	// Only the pictures that get displayed are drawn from the eyes' positions. Offscreen renders
+	// (shadow textures, reflections, Time Crisis II's character shadows into 0x1a40) are not seen
+	// through the window; they stay the same for both eyes and are used like any texture.
+	if (GSVolumetric::GetStereo().enabled)
+	{
+		for (int i = 0; i < 2; i++)
+		{
+			const u32 bp = m_regs->DISP[i].DISPFB.Block();
+			if (std::find(m_stereo_display_bp.begin(), m_stereo_display_bp.end(), bp) == m_stereo_display_bp.end())
+			{
+				std::rotate(m_stereo_display_bp.rbegin(), m_stereo_display_bp.rbegin() + 1, m_stereo_display_bp.rend());
+				m_stereo_display_bp[0] = bp;
+			}
+		}
+	}
+	m_stereo_display_target = rt && std::find(m_stereo_display_bp.begin(), m_stereo_display_bp.end(),
+										 static_cast<u32>(rt->m_TEX0.TBP0)) != m_stereo_display_bp.end();
+
+	// Stereo diagnostics: every 5 s, how the draws were classified, with a few examples of the
+	// non-FST draws pinned for texturing from a target.
+	if (GSVolumetric::GetStereo().enabled)
+	{
+		static u32 s_total, s_fst, s_pin_target, s_pin_q1, s_pin_target_eqz, s_examples;
+		static u64 s_next_log;
+		s_total++;
+		if (PRIM->FST)
+			s_fst++;
+		else if (stereo_source)
+		{
+			s_pin_target++;
+			if (m_vt.m_eq.z)
+				s_pin_target_eqz++;
+			if (s_examples < 6)
+			{
+				s_examples++;
+				Console.WriteLn("Stereo pin: stereo-source draw prim %d verts %u tex %04x/%d (target %04x) rt %04x z %.0f..%.0f q %.3f..%.3f "
+								"bbox %.0f,%.0f-%.0f,%.0f zwrite %d",
+					static_cast<int>(m_vt.m_primclass), m_vertex->next, static_cast<u32>(m_cached_ctx.TEX0.TBP0),
+					static_cast<int>(m_cached_ctx.TEX0.PSM), tex->m_from_target ? static_cast<u32>(tex->m_from_target->m_TEX0.TBP0) : 0xFFFFu,
+					rt ? static_cast<u32>(rt->m_TEX0.TBP0) : 0xFFFFu, m_vt.m_min.p.z, m_vt.m_max.p.z, m_vt.m_min.t.z, m_vt.m_max.t.z,
+					m_vt.m_min.p.x, m_vt.m_min.p.y, m_vt.m_max.p.x, m_vt.m_max.p.y, m_cached_ctx.ZBUF.ZMSK ? 0 : 1);
+			}
+		}
+		else if (m_stereo_screen_space)
+		{
+			s_pin_q1++;
+			if (s_examples < 12)
+			{
+				s_examples++;
+				Console.WriteLn("Stereo pin: Q=1 draw prim %d verts %u tex %04x/%d %s rt %04x z %.0f..%.0f eqz %d bbox %.0f,%.0f-%.0f,%.0f "
+								"zwrite %d zte %d abe %d",
+					static_cast<int>(m_vt.m_primclass), m_vertex->next, static_cast<u32>(m_cached_ctx.TEX0.TBP0),
+					static_cast<int>(m_cached_ctx.TEX0.PSM), tex ? "src" : "none", rt ? static_cast<u32>(rt->m_TEX0.TBP0) : 0xFFFFu,
+					m_vt.m_min.p.z, m_vt.m_max.p.z, m_vt.m_eq.z ? 1 : 0, m_vt.m_min.p.x, m_vt.m_min.p.y, m_vt.m_max.p.x,
+					m_vt.m_max.p.y, m_cached_ctx.ZBUF.ZMSK ? 0 : 1, static_cast<int>(m_cached_ctx.TEST.ZTE),
+					static_cast<int>(PRIM->ABE));
+			}
+		}
+		const u64 now = Common::Timer::GetCurrentValue();
+		if (now >= s_next_log)
+		{
+			if (s_next_log)
+				Console.WriteLn("Stereo draws: %u total, %u FST, %u non-FST pinned (stereo texture; %u at one Z), %u pinned (Q=1)",
+					s_total, s_fst, s_pin_target, s_pin_target_eqz, s_pin_q1);
+			s_total = s_fst = s_pin_target = s_pin_q1 = s_pin_target_eqz = s_examples = 0;
+			s_next_log = now + static_cast<u64>(Common::Timer::ConvertSecondsToValue(5.0));
+		}
+	}
+
 	// Vertex shader config
 	float vs_scale_x, vs_scale_y;
 	DetermineVSConfig(rt, rtscale, rtsize, rt_unscaled_size, vs_scale_x, vs_scale_y);
@@ -12681,7 +12884,7 @@ bool GSRendererHW::OI_BlitFMV(GSTextureCache::Target* _rt, GSTextureCache::Sourc
 		r_texture.w -= offset;
 		const int new_height = std::max(r_texture.w, th);
 
-		if (GSTexture* temp_tex = g_gs_device->CreateTexture(tw, new_height, 1, tex->m_texture->GetFormat(), true))
+		if (GSTexture* temp_tex = g_gs_device->CreateTexture(tw, new_height, 1, tex->m_texture->GetFormat(), true, tex->m_texture->GetArrayLayers()))
 		{
 			if (GSTexture* rt = g_gs_device->CreateFeedbackTarget(tw, new_height, GSTexture::Format::Color))
 			{
@@ -13181,7 +13384,7 @@ void GSRendererHW::EndHLEHardwareDraw(bool force_copy_on_hazard /* = false */)
 		{
 			// Have to copy texture. Assume the whole thing is read, in all the cases this is used, it is.
 			GSTexture* src = (config.tex == config.rt) ? config.rt : config.ds;
-			copy = g_gs_device->CreateTexture(src->GetWidth(), src->GetHeight(), 1, src->GetFormat(), true);
+			copy = g_gs_device->CreateTexture(src->GetWidth(), src->GetHeight(), 1, src->GetFormat(), true, src->GetArrayLayers());
 			if (!copy)
 			{
 				Console.Error("HW: Texture allocation failure in EndHLEHardwareDraw()");

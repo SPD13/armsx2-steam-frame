@@ -346,6 +346,11 @@ private:
 	int m_skip_offset = 0;
 
 	bool m_process_texture = false;
+	// GSVolumetric stereo: this draw works in screen space and gets no parallax shift (see Draw).
+	bool m_stereo_screen_space = false;
+	bool m_stereo_source = false; // ... because it textures from a stereo picture
+	bool m_stereo_display_target = false; // this draw's target is (or was recently) displayed
+	std::array<u32, 4> m_stereo_display_bp = {~0u, ~0u, ~0u, ~0u}; // recent display framebuffer bases
 	bool m_downscale_source = false;
 
 	/// This draw samples the guest's own texels in place of a generated upscale

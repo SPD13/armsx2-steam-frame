@@ -32,6 +32,9 @@ struct GSVolumetricFrame
 	// Geometric stereo prototype (GSVolumetric::SetStereo): which eye the presented frame was drawn
 	// for, 0 = left, 1 = right; -1 without stereo.
 	int stereo_eye = -1;
+	// Multiview stereo: the presented frame is a 2-layer texture, layer 0 for the left eye and 1 for
+	// the right (stereo_eye is then -1).
+	bool stereo_layers = false;
 	// R32F canvas like depth: the depth target as it is at vsync, when depth comes from a snapshot
 	// taken during this frame. A HUD drawn after it with Z writes shows here at the Z format's
 	// maximum, which tells it apart from lights and effects drawn after it without Z.
@@ -63,11 +66,16 @@ namespace GSVolumetric
 	//   Z mode: f = clamp(1 - Znorm / convergence, 0, 1) (Znorm = Z / format maximum)
 	// f is 0 for depth at the convergence (on the screen) and 1 for the farthest geometry.
 	// Screen-space (FST) draws and HUDs stamped at the maximum depth are not shifted.
+	//
+	// With multiview, both eyes are drawn in every frame instead: every render target gets one layer
+	// per eye and every draw is a VK_KHR_multiview draw that applies each eye's shift to its own
+	// layer. Needs the Vulkan renderer, and is fixed when the GS device is created.
 	struct StereoSettings
 	{
 		bool enabled = false;
 		bool z_mode = false;
 		float convergence = 1.0f;
+		bool multiview = false;
 	};
 	void SetStereo(const StereoSettings& settings);
 	const StereoSettings& GetStereo();
@@ -76,4 +84,13 @@ namespace GSVolumetric
 	// down, as the eye would see the screen move) and the depth factor R / (D + R) for geometry R
 	// behind a screen D away.
 	void SetEyeView(int eye, float offset_x, float offset_y, float depth_factor);
+
+	// Debugging: at the next present, write <prefix>-left.png / -right.png (the images handed to the
+	// host) and <prefix>-layer0.png / -layer1.png (the frame's two layers). Any thread.
+	void RequestPresentDump(std::string prefix);
+	std::string TakePresentDumpRequest(); // the pending prefix, or empty
+	// Debugging: log every hardware draw of the next `frames` frames.
+	void ArmDrawTrace(int frames);
+	bool DrawTraceActive();
+	u32 DrawTraceNumber(); // which trace is running (counts from 1)
 } // namespace GSVolumetric

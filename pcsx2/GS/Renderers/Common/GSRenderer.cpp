@@ -89,6 +89,41 @@ void GSVolumetric::SetEyeView(int eye, float offset_x, float offset_y, float dep
 	s_eye_view[eye][2].store(depth_factor, std::memory_order_relaxed);
 }
 
+static std::mutex s_present_dump_mutex;
+static std::string s_present_dump_prefix;
+
+void GSVolumetric::RequestPresentDump(std::string prefix)
+{
+	std::lock_guard lock(s_present_dump_mutex);
+	s_present_dump_prefix = std::move(prefix);
+}
+
+static std::atomic<int> s_draw_trace_frames{0};
+static std::atomic<int> s_draw_trace_pending{0};
+
+void GSVolumetric::ArmDrawTrace(int frames)
+{
+	s_draw_trace_pending.store(frames, std::memory_order_release);
+}
+
+static std::atomic<u32> s_draw_trace_number{0};
+
+u32 GSVolumetric::DrawTraceNumber()
+{
+	return s_draw_trace_number.load(std::memory_order_relaxed);
+}
+
+bool GSVolumetric::DrawTraceActive()
+{
+	return s_draw_trace_frames.load(std::memory_order_relaxed) > 0;
+}
+
+std::string GSVolumetric::TakePresentDumpRequest()
+{
+	std::lock_guard lock(s_present_dump_mutex);
+	return std::exchange(s_present_dump_prefix, std::string());
+}
+
 GSVector4 GSVolumetricEyeShift(int eye)
 {
 	const float k = s_eye_view[eye][2].load(std::memory_order_relaxed);
@@ -1147,7 +1182,22 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
 	// Stereo: the presented frame belongs to the eye its target was drawn for (a double-buffered
 	// game shows the buffer drawn during the previous frame); the next frame is drawn for the
 	// other eye.
-	if (s_stereo.enabled)
+	// Draw trace: the armed frames start at a frame boundary.
+	if (const int pending = s_draw_trace_pending.exchange(0, std::memory_order_acq_rel); pending > 0)
+	{
+		s_draw_trace_frames.store(pending, std::memory_order_relaxed);
+		s_draw_trace_number.fetch_add(1, std::memory_order_relaxed);
+		Console.WriteLn("Draw trace: start (%d frames)", pending);
+	}
+	else if (s_draw_trace_frames.load(std::memory_order_relaxed) > 0 &&
+			 s_draw_trace_frames.fetch_sub(1, std::memory_order_relaxed) == 1)
+	{
+		Console.WriteLn("Draw trace: end");
+	}
+
+	// With multiview the frame holds both eyes, one per layer.
+	s_volumetric_frame.stereo_layers = s_stereo.enabled && g_gs_device->GetStereoLayers() > 1;
+	if (s_stereo.enabled && !s_volumetric_frame.stereo_layers)
 	{
 		const int shown = DisplayedStereoEye();
 		s_volumetric_frame.stereo_eye = shown >= 0 ? shown : s_stereo_eye;
