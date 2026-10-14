@@ -734,6 +734,16 @@ bool GSGetPresentCapSuspended()
 	return s_present_cap_suspended.load(std::memory_order_relaxed);
 }
 
+static std::atomic<u32> s_video_decode_count{0};
+void GSNoteVideoDecode()
+{
+	s_video_decode_count.fetch_add(1, std::memory_order_relaxed);
+}
+u32 GSGetVideoDecodeCount()
+{
+	return s_video_decode_count.load(std::memory_order_relaxed);
+}
+
 void GSvsync(u32 field, bool registers_written)
 {
 	// Update this here because we need to check if the pending draw affects the current frame, so our regs need to be updated.
