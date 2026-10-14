@@ -106,6 +106,10 @@ namespace usb_lightgun
 		std::atomic<float> x{0.0f};
 		std::atomic<float> y{0.0f};
 		std::atomic<u32> buttons{0};
+		// The game's Set Param requests: how many, and the last offset.
+		std::atomic<u32> param_count{0};
+		std::atomic<s32> param_x{0};
+		std::atomic<s32> param_y{0};
 	};
 	static HostState s_host_state[2];
 
@@ -119,6 +123,17 @@ namespace usb_lightgun
 		h.aim_valid.store(aim_valid, std::memory_order_relaxed);
 		h.buttons.store(buttons, std::memory_order_relaxed);
 		h.active.store(active, std::memory_order_release);
+	}
+
+	u32 GetGameParams(u32 port, s16* x, s16* y)
+	{
+		if (port >= std::size(s_host_state))
+			return 0;
+		const HostState& h = s_host_state[port];
+		const u32 count = h.param_count.load(std::memory_order_acquire);
+		*x = static_cast<s16>(h.param_x.load(std::memory_order_relaxed));
+		*y = static_cast<s16>(h.param_y.load(std::memory_order_relaxed));
+		return count;
 	}
 
 	bool IsKnownGame(std::string_view serial)
@@ -290,6 +305,13 @@ namespace usb_lightgun
 			us->param_mode = static_cast<u16>(data[4]) | (static_cast<u16>(data[5]) << 8);
 			// ARMSX2 VR: always logged, it is the game's own calibration (useful when aiming is off).
 			Console.WriteLn("GunCon2 Set Param %04X %d %d", us->param_mode, us->param_x, us->param_y);
+			if (us->port < std::size(s_host_state))
+			{
+				HostState& h = s_host_state[us->port];
+				h.param_x.store(us->param_x, std::memory_order_relaxed);
+				h.param_y.store(us->param_y, std::memory_order_relaxed);
+				h.param_count.fetch_add(1, std::memory_order_release);
+			}
 			return;
 		}
 

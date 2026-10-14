@@ -44,6 +44,10 @@ namespace usb_lightgun
 	// mouse pointer (off the picture when !aim_valid), with `buttons` held. Any thread; the gun reads
 	// it whenever the game polls it, so it survives the device being plugged in or out.
 	void SetHostState(u32 port, bool active, bool aim_valid, float window_x, float window_y, u32 buttons);
+	// How many times the game has set the parameters of the gun on `port` (Set Param: its own
+	// calibration offset, which games send after a calibration shot, and some at start), and the
+	// last offset. Any thread.
+	u32 GetGameParams(u32 port, s16* x, s16* y);
 	// Whether the game is a known GunCon 2 game (it has a screen calibration entry).
 	bool IsKnownGame(std::string_view serial);
 } // namespace usb_lightgun
