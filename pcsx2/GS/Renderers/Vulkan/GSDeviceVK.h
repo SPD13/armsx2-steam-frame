@@ -809,6 +809,9 @@ private:
 
 	bool CompileImGuiPipeline();
 	void RenderImGui();
+	// Draws the ImGui frame RenderImGui rendered, again, into the render pass begun on the current
+	// command buffer (the right eye's backbuffer in multiview stereo).
+	void DrawImGui();
 	void RenderBlankFrame();
 
 	void DestroyResources();

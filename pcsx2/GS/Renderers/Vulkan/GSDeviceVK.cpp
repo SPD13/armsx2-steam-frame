@@ -3643,6 +3643,27 @@ GSTextureVK* GSDeviceVK::PresentRightEye(VkCommandBuffer cmdbuffer, GSTextureVK*
 		}
 	}
 
+	// The ImGui overlay (OSD messages) the present drew over the left eye, drawn again over the
+	// right one, at the same place: it stays flat on the screen.
+	right->TransitionToLayout(cmdbuffer, GSTextureVK::Layout::ColorAttachment);
+	if (const VkFramebuffer fb = right->GetFramebuffer(false); fb != VK_NULL_HANDLE)
+	{
+		const u32 w = static_cast<u32>(right->GetWidth()), h = static_cast<u32>(right->GetHeight());
+		const VkRenderPassBeginInfo rp = {VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO, nullptr,
+			GetRenderPass(right->GetVkFormat(), VK_FORMAT_UNDEFINED, VK_ATTACHMENT_LOAD_OP_LOAD,
+				VK_ATTACHMENT_STORE_OP_STORE),
+			fb, {{0, 0}, {w, h}}, 0u, nullptr};
+		vkCmdBeginRenderPass(cmdbuffer, &rp, VK_SUBPASS_CONTENTS_INLINE);
+		const VkViewport vp{0.0f, 0.0f, static_cast<float>(w), static_cast<float>(h), 0.0f, 1.0f};
+		const VkRect2D scissor{{0, 0}, {w, h}};
+		vkCmdSetViewport(cmdbuffer, 0, 1, &vp);
+		vkCmdSetScissor(cmdbuffer, 0, 1, &scissor);
+		m_scissor = GSVector4i(0, 0, static_cast<s32>(w), static_cast<s32>(h));
+		m_dirty_flags |= DIRTY_UTILITY_STATE;
+		DrawImGui();
+		vkCmdEndRenderPass(cmdbuffer);
+	}
+
 	right->TransitionToLayout(cmdbuffer, GSTextureVK::Layout::ShaderReadOnly);
 	return right.get();
 }
@@ -7165,11 +7186,18 @@ bool GSDeviceVK::CompileImGuiPipeline()
 void GSDeviceVK::RenderImGui()
 {
 	ImGui::Render();
-	const ImDrawData* draw_data = ImGui::GetDrawData();
-	if (draw_data->CmdLists.Size == 0)
+	if (ImGui::GetDrawData()->CmdLists.Size == 0)
 		return;
 
 	UpdateImGuiTextures();
+	DrawImGui();
+}
+
+void GSDeviceVK::DrawImGui()
+{
+	const ImDrawData* draw_data = ImGui::GetDrawData();
+	if (!draw_data || draw_data->CmdLists.Size == 0)
+		return;
 
 	// ImGui's vertex Position and ClipRect both come in *logical* pixel coords
 	// (against io.DisplaySize, which we set to the rotated presentation size).
