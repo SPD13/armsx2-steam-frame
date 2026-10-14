@@ -298,8 +298,13 @@ void GSRendererHW::SnapshotDepthBeforeDraw()
 	const float scissor_h = static_cast<float>(scissor.SCAY1 - scissor.SCAY0 + 1);
 	const bool covers_frame = (m_vt.m_max.p.x - m_vt.m_min.p.x) >= 0.9f * scissor_w &&
 	                          (m_vt.m_max.p.y - m_vt.m_min.p.y) >= 0.9f * scissor_h;
-	const bool flat_overwrite = !m_cached_ctx.ZBUF.ZMSK && m_vt.m_eq.z && covers_frame &&
-	                            (!m_cached_ctx.TEST.ZTE || m_cached_ctx.TEST.ZTST == ZTST_ALWAYS);
+	// A depth test that the flat Z passes everywhere is no condition either: Ninja Assault starts each
+	// frame with a full-screen sprite at 0xFFFF00 (24-bit Z), tested GEQUAL, over the frame just drawn.
+	const float z_max = static_cast<float>((1ull << GSLocalMemory::m_psm[m_cached_ctx.ZBUF.PSM].trbpp) - 1);
+	const bool passes_everywhere = !m_cached_ctx.TEST.ZTE || m_cached_ctx.TEST.ZTST == ZTST_ALWAYS ||
+	                               ((m_cached_ctx.TEST.ZTST == ZTST_GEQUAL || m_cached_ctx.TEST.ZTST == ZTST_GREATER) &&
+	                                   m_vt.m_min.p.z >= 0.99f * z_max);
+	const bool flat_overwrite = !m_cached_ctx.ZBUF.ZMSK && m_vt.m_eq.z && covers_frame && passes_everywhere;
 	if (m_depth_trace_frame)
 	{
 		Console.WriteLnFmt("DepthTrace:   draw {} rt {:05x} z {:05x} {} {} ztst {} prim {} fbmsk {:08x} tex {} "
