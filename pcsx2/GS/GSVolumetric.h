@@ -17,6 +17,8 @@
 
 #include "GS/GSVector.h"
 
+#include <string>
+
 class GSTexture;
 
 struct GSVolumetricFrame
@@ -85,6 +87,8 @@ namespace GSVolumetric
 	// down, as the eye would see the screen move) and the depth factor R / (D + R) for geometry R
 	// behind a screen D away.
 	void SetEyeView(int eye, float offset_x, float offset_y, float depth_factor);
+	// The eye's on-screen shift for the farthest geometry (offset times depth factor), in x and y.
+	GSVector4 EyeShift(int eye);
 
 	// Debugging: at the next present, write <prefix>-left.png / -right.png (the images handed to the
 	// host) and <prefix>-layer0.png / -layer1.png (the frame's two layers). Any thread.
@@ -94,4 +98,10 @@ namespace GSVolumetric
 	void ArmDrawTrace(int frames);
 	bool DrawTraceActive();
 	u32 DrawTraceNumber(); // which trace is running (counts from 1)
+
+	// GSRenderer::VSync: before the display merge, and after it with the eye the displayed target
+	// was drawn for (-1 if unknown), whether the frame repeats the last one, and whether the device
+	// draws both eyes per frame.
+	void BeginVSync();
+	void EndMerge(int displayed_eye, bool idle_frame, bool multiview);
 } // namespace GSVolumetric

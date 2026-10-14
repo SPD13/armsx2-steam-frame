@@ -4,9 +4,7 @@
 #pragma once
 
 #include "GSTextureCache.h"
-#include <array>
-#include <map>
-#include <tuple>
+#include "GS/Renderers/HW/GSRendererHWVolumetric.h"
 #include "GS/Renderers/HW/GSDrawAlphaMask.h"
 #include "GS/Renderers/Common/GSFunctionMap.h"
 #include "GS/Renderers/Common/GSNativeTexelGridPolicy.h"
@@ -346,11 +344,6 @@ private:
 	int m_skip_offset = 0;
 
 	bool m_process_texture = false;
-	// GSVolumetric stereo: this draw works in screen space and gets no parallax shift (see Draw).
-	bool m_stereo_screen_space = false;
-	bool m_stereo_source = false; // ... because it textures from a stereo picture
-	bool m_stereo_display_target = false; // this draw's target is (or was recently) displayed
-	std::array<u32, 4> m_stereo_display_bp = {~0u, ~0u, ~0u, ~0u}; // recent display framebuffer bases
 	bool m_downscale_source = false;
 
 	/// This draw samples the guest's own texels in place of a generated upscale
@@ -442,49 +435,17 @@ private:
 	// software sprite renderer state
 	GSSwPrimRenderState m_sw_prim;
 
-	// ARMSX2 VR (GSVolumetric.h). Which depth target each colour target's 3D geometry (Z writes
-	// on, depth varying across the draw) was last drawn with, keyed by the colour target's base
-	// block; a few entries cover the scene, its post-processing buffers and double-buffered frames.
-	// Games often share one Z buffer between their frame buffers and clear it, or stamp the HUD into
-	// it, before the finished frame is displayed, so each pairing keeps a snapshot of the depth taken
-	// when its frame was done (see SnapshotDepthBeforeDraw).
-	struct DepthPairing
-	{
-		u32 rt_bp = 0;
-		u32 rt_bw = 0;
-		u32 z_bp = 0;
-		u32 z_bw = 0;
-		u32 z_psm = 0;
-		u64 last_draw = 0;
-		bool dirty = false; // 3D depth written since the last snapshot
-		GSTexture* snapshot = nullptr; // R32F copy of the whole depth target
-		float snapshot_scale = 1.0f; // the depth target's scale when copied
-		GSTexture* colour_snapshot = nullptr; // the colour target at the same moment
-		float colour_snapshot_scale = 1.0f;
-		u32 snapshot_vsync = 0; // m_depth_vsync when the snapshot was taken
-	};
-	std::array<DepthPairing, 8> m_depth_pairings{};
-	// GSVolumetric stereo: the eye each recently drawn colour target (by base block) was drawn for.
-	std::array<std::pair<u32, int>, 8> m_rt_stereo_eye{};
-	u32 m_rt_stereo_eye_next = 0;
-	// The display targets GetOutput() returned this vsync, per circuit.
-	std::array<GSTextureCache::Target*, 2> m_output_rt{};
-	// Rings of R32F depth and RGBA8 pre-HUD canvases, so the host can still be reading earlier ones.
-	std::array<GSTexture*, 3> m_depth_canvas{};
-	std::array<GSTexture*, 3> m_prehud_canvas{};
-	std::array<GSTexture*, 3> m_live_depth_canvas{};
-	u32 m_depth_canvas_index = 0;
-	u32 m_depth_vsync = 1; // counts MergeDepth calls; 0 never matches a snapshot
-
-	void RecordDepthPairing(const GSTextureCache::Target* rt, const GSTextureCache::Target* ds);
+	// ARMSX2 VR (GSVolumetric.h): depth capture and stereo, in GSRendererHWVolumetric.h/.cpp.
+	GSRendererHWVolumetricState m_vr;
+	void RecordDepthPairing(GSTextureCache::Target* rt, GSTextureCache::Target* ds);
 	void SnapshotDepthBeforeDraw();
-	void SnapshotDepth(DepthPairing& pairing);
-	// GSVolumetric::SetTrace: Z-writing draws per (rt bp, z bp, flat z, ztst) since the last print.
-	std::map<std::tuple<u32, u32, bool, u32>, u32> m_depth_trace;
-	u32 m_depth_trace_vsyncs = 0;
-	bool m_depth_trace_frame = false; // logging every draw of the current frame
-	float m_trace_q_min = 0.0f, m_trace_q_max = 0.0f; // Q range of perspective textured draws
+	void SnapshotDepth(GSVolumetricDepthPairing& pairing);
 	void ReleaseDepthCanvases();
+	void VolumetricTraceDraw(GSTextureCache::Target* rt, GSTextureCache::Target* ds, GSTextureCache::Source* src, bool skip_draw);
+	void VolumetricSaveTraceDraw(GSTextureCache::Target* rt, GSTextureCache::Target* ds, bool skip_draw);
+	void VolumetricRecordDraw(GSTextureCache::Target* rt, GSTextureCache::Target* ds);
+	void VolumetricClassifyDraw(GSTextureCache::Target* rt, GSTextureCache::Source* tex);
+	void VolumetricStereoConstants(GSTextureCache::Target* rt);
 
 public:
 	GSRendererHW();

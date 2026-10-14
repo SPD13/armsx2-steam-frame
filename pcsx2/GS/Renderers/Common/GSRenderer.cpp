@@ -36,7 +36,6 @@
 #include "IconsFontAwesome.h"
 
 #include <algorithm>
-#include <atomic>
 #include <array>
 #include <deque>
 #include <thread>
@@ -58,106 +57,6 @@ std::unique_ptr<GSRenderer> g_gs_renderer;
 // Since we read this on the EE thread, we can't put it in the renderer, because
 // we might be switching while the other thread reads it.
 static GSVector4 s_last_draw_rect;
-
-// Atomic: a host may switch it while the GS runs (the light gun needs depth in stereo mode).
-static std::atomic<bool> s_volumetric_enabled{false};
-static GSVolumetric::StereoSettings s_stereo;
-static int s_stereo_eye = 0;
-
-void GSVolumetric::SetStereo(const StereoSettings& settings)
-{
-	s_stereo = settings;
-}
-
-const GSVolumetric::StereoSettings& GSVolumetric::GetStereo()
-{
-	return s_stereo;
-}
-
-int GSVolumetric::CurrentEye()
-{
-	return s_stereo_eye;
-}
-
-// Written by the host thread, read by the GS thread per draw; a torn update only mixes two
-// consecutive head positions.
-static std::atomic<float> s_eye_view[2][3] = {};
-
-void GSVolumetric::SetEyeView(int eye, float offset_x, float offset_y, float depth_factor)
-{
-	s_eye_view[eye][0].store(offset_x, std::memory_order_relaxed);
-	s_eye_view[eye][1].store(offset_y, std::memory_order_relaxed);
-	s_eye_view[eye][2].store(depth_factor, std::memory_order_relaxed);
-}
-
-static std::mutex s_present_dump_mutex;
-static std::string s_present_dump_prefix;
-
-void GSVolumetric::RequestPresentDump(std::string prefix)
-{
-	std::lock_guard lock(s_present_dump_mutex);
-	s_present_dump_prefix = std::move(prefix);
-}
-
-static std::atomic<int> s_draw_trace_frames{0};
-static std::atomic<int> s_draw_trace_pending{0};
-
-void GSVolumetric::ArmDrawTrace(int frames)
-{
-	s_draw_trace_pending.store(frames, std::memory_order_release);
-}
-
-static std::atomic<u32> s_draw_trace_number{0};
-
-u32 GSVolumetric::DrawTraceNumber()
-{
-	return s_draw_trace_number.load(std::memory_order_relaxed);
-}
-
-bool GSVolumetric::DrawTraceActive()
-{
-	return s_draw_trace_frames.load(std::memory_order_relaxed) > 0;
-}
-
-std::string GSVolumetric::TakePresentDumpRequest()
-{
-	std::lock_guard lock(s_present_dump_mutex);
-	return std::exchange(s_present_dump_prefix, std::string());
-}
-
-GSVector4 GSVolumetricEyeShift(int eye)
-{
-	const float k = s_eye_view[eye][2].load(std::memory_order_relaxed);
-	return GSVector4(s_eye_view[eye][0].load(std::memory_order_relaxed) * k,
-		s_eye_view[eye][1].load(std::memory_order_relaxed) * k, 0.0f, 0.0f);
-}
-static bool s_volumetric_trace = false;
-static GSVolumetricFrame s_volumetric_frame;
-
-void GSVolumetric::SetTrace(bool enabled)
-{
-	s_volumetric_trace = enabled;
-}
-
-bool GSVolumetric::IsTraceEnabled()
-{
-	return s_volumetric_trace;
-}
-
-void GSVolumetric::SetEnabled(bool enabled)
-{
-	s_volumetric_enabled.store(enabled, std::memory_order_relaxed);
-}
-
-bool GSVolumetric::IsEnabled()
-{
-	return s_volumetric_enabled.load(std::memory_order_relaxed);
-}
-
-GSVolumetricFrame& GSVolumetric::CurrentFrame()
-{
-	return s_volumetric_frame;
-}
 
 // Last time we reset the renderer due to a GPU crash, if any.
 static Common::Timer::Value s_last_gpu_reset_time;
@@ -1176,10 +1075,7 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
 		m_snapshot.empty() && !m_dump && m_dump_frames == 0 &&
 		!GSConfig.ShouldDump(s_n, g_perfmon.GetFrame()) && g_gs_device->GetCurrent() != nullptr;
 
-	// Whatever the merge below does not refresh must not be presented with this frame.
-	s_volumetric_frame.depth = nullptr;
-	s_volumetric_frame.prehud = nullptr;
-	s_volumetric_frame.live_depth = nullptr;
+	GSVolumetric::BeginVSync();
 
 	bool merged_frame;
 	if (!request_skipped_final_render)
@@ -1198,35 +1094,7 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
 	}
 	const bool skipped_final_render = request_skipped_final_render && merged_frame;
 
-	// Stereo: the presented frame belongs to the eye its target was drawn for (a double-buffered
-	// game shows the buffer drawn during the previous frame); the next frame is drawn for the
-	// other eye.
-	// Draw trace: the armed frames start at a frame boundary.
-	if (const int pending = s_draw_trace_pending.exchange(0, std::memory_order_acq_rel); pending > 0)
-	{
-		s_draw_trace_frames.store(pending, std::memory_order_relaxed);
-		s_draw_trace_number.fetch_add(1, std::memory_order_relaxed);
-		Console.WriteLn("Draw trace: start (%d frames)", pending);
-	}
-	else if (s_draw_trace_frames.load(std::memory_order_relaxed) > 0 &&
-			 s_draw_trace_frames.fetch_sub(1, std::memory_order_relaxed) == 1)
-	{
-		Console.WriteLn("Draw trace: end");
-	}
-
-	// With multiview the frame holds both eyes, one per layer.
-	s_volumetric_frame.stereo_layers = s_stereo.enabled && g_gs_device->GetStereoLayers() > 1;
-	if (s_stereo.enabled && !s_volumetric_frame.stereo_layers)
-	{
-		const int shown = DisplayedStereoEye();
-		s_volumetric_frame.stereo_eye = shown >= 0 ? shown : s_stereo_eye;
-		if (!idle_frame)
-			s_stereo_eye ^= 1;
-	}
-	else
-	{
-		s_volumetric_frame.stereo_eye = -1;
-	}
+	GSVolumetric::EndMerge(DisplayedStereoEye(), idle_frame, g_gs_device->GetStereoLayers() > 1);
 	const bool blank_frame = !merged_frame;
 	// Run length, not just "was blank": the policy below distinguishes a single alternating blank
 	// (an interlaced-field artefact, safe to drop) from a run of them (a fade the game is actually
@@ -1332,8 +1200,8 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
 				src_rect, current->GetSize(), s_display_alignment, g_gs_device->UsesLowerLeftOrigin(),
 				GetVideoMode() == GSVideoMode::SDTV_480P);
 			s_last_draw_rect = draw_rect;
-			s_volumetric_frame.src_uv = src_uv;
-			s_volumetric_frame.draw_rect = draw_rect;
+			GSVolumetric::CurrentFrame().src_uv = src_uv;
+			GSVolumetric::CurrentFrame().draw_rect = draw_rect;
 
 			// MetalFX spatial upscale runs before CAS/present, and only when actually upscaling
 			// (source smaller than the on-screen draw rect). CAS can still sharpen afterward.

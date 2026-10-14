@@ -31,6 +31,10 @@
 #include <vector>
 
 class VKSwapChain;
+namespace VKLibretro
+{
+	struct Frame;
+}
 struct GSSelfReadRoadDecision;
 
 class GSDeviceVK final : public GSDevice
@@ -989,13 +993,18 @@ public:
 	// array_view: bind it as an array (all layers), for the MULTIVIEW utility passes drawn inside
 	// multiview TFX render passes; otherwise a layered texture is bound as its layer 0.
 	void SetUtilityTexture(GSTexture* tex, VkSampler sampler, bool array_view = false);
+	// ARMSX2 VR multiview stereo and libretro frame export, in GSDeviceVKVolumetric.cpp.
+	void EnableStereoMultiview(VkDeviceCreateInfo& device_info, VkPhysicalDeviceMultiviewFeatures& multiview_feature);
 	void CheckStereoRenderPass(VkRenderPass rp);
-	GSTextureVK* PresentRightEye(VkCommandBuffer cmdbuffer, GSTextureVK* bb);
 	void RestartMultiviewPassForNewConstants();
-	// Debugging: the $PS2V_FLUSH_FILE draw range of DoRenderHW (see there).
+	GSTextureVK* PresentRightEye(VkCommandBuffer cmdbuffer, GSTextureVK* bb, int bb_index);
+	GSTextureVK* PrepareVolumetricPresent(VkCommandBuffer cmdbuffer, GSTextureVK* bb, int bb_index);
+	void FillVolumetricFrame(VKLibretro::Frame& frame, GSTextureVK* bb, GSTextureVK* bb_right);
+	void ReleaseStereoBackbuffers();
+	// Debugging: the $PS2V_FLUSH_FILE draw range of DoRenderHW (see DebugFlushAfterDraw).
 	void DebugReadFlushRange();
+	void DebugFlushAfterDraw();
 	u32 m_debug_draw_index = 0;
-	static u32 s_debug_flush_first, s_debug_flush_last;
 
 	// GSVolumetric multiview stereo: TFX shaders declare array samplers.
 	__fi VkImageView GetTFXView(GSTextureVK* tex) { return IsMultiview() ? tex->GetArrayView() : tex->GetView(); }
