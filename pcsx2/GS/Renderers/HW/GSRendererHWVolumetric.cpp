@@ -432,9 +432,12 @@ void GSRendererHW::VolumetricStereoConstants(GSTextureCache::Target* rt)
 		const bool multiview = g_gs_device->GetStereoLayers() > 1;
 		const GSVector4 shift = GSVolumetric::EyeShift(multiview ? 0 : GSVolumetric::CurrentEye());
 		const GSVector4 shift_right = multiview ? GSVolumetric::EyeShift(1) : GSVector4::zero();
-		m_conf.cb_vs.vr_stereo = GSVector4(shift.x, shift.y, stereo.convergence, stereo.z_mode ? 1.0f : 0.0f);
-		m_conf.cb_vs.vr_stereo2 =
-			GSVector4(4294967296.0f / static_cast<float>(z_format_max), shift_right.x, shift_right.y, 0.0f);
+		// Portal: w carries the eyes' distance ratios, the left one negated (w < 0 selects the portal).
+		const bool portal = stereo.portal && stereo.z_mode;
+		const float mode = portal ? -std::max(shift.z, 0.01f) : stereo.z_mode ? 1.0f : 0.0f;
+		m_conf.cb_vs.vr_stereo = GSVector4(shift.x, shift.y, stereo.convergence, mode);
+		m_conf.cb_vs.vr_stereo2 = GSVector4(4294967296.0f / static_cast<float>(z_format_max), shift_right.x,
+			shift_right.y, portal ? std::max(shift_right.z, 0.01f) : 0.0f);
 	}
 	else
 	{

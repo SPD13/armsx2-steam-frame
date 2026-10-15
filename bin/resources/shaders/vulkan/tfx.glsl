@@ -25,28 +25,39 @@ layout(std140, set = 0, binding = 0) uniform cb0
 	vec2 PointSize;
 	uint MaxDepth;
 	float LineAA1Width;
-	vec4 VRStereo; // GSVolumetric stereo: xy the (left) eye's shift for the farthest geometry (0 = off), z convergence, w Z mode
-	vec4 VRStereo2; // x: integer-scaled depth to 0..1 of the Z format, yz: the right eye's shift (multiview)
+	vec4 VRStereo; // GSVolumetric stereo: xy the (left) eye's shift for the farthest geometry (0 = off), z convergence, w Z mode (1), or portal (minus the left eye's distance ratio)
+	vec4 VRStereo2; // x: integer-scaled depth to 0..1 of the Z format, yz: the right eye's shift (multiview), w: portal, the right eye's distance ratio
 };
 
-// GSVolumetric stereo: on-screen shift of a vertex for the eye's position, in NDC - the parallax
+// GSVolumetric stereo: where a vertex lands on screen for the eye's position, in NDC - the parallax
 // of a window: geometry at the convergence stays on the screen, the farthest moves most. With
-// multiview, view 0 is the left eye and view 1 the right.
-vec2 VRStereoShift(float q, float z_ndc)
+// multiview, view 0 is the left eye and view 1 the right. The portal also scales the picture about
+// the screen centre for the eye's distance (GSVolumetric::StereoSettings).
+vec2 VRStereoPlace(vec2 p, float q, float z_ndc)
 {
 #if MULTIVIEW
 	const vec2 eye = (gl_ViewIndex == 0) ? VRStereo.xy : VRStereo2.yz;
 #else
 	const vec2 eye = VRStereo.xy;
 #endif
+	if (VRStereo.w < 0.0f)
+	{
+#if MULTIVIEW
+		const float r = (gl_ViewIndex == 0) ? -VRStereo.w : VRStereo2.w;
+#else
+		const float r = -VRStereo.w;
+#endif
+		const float u = clamp((z_ndc * VRStereo2.x) / max(VRStereo.z, 1e-6f), 0.0f, 1.0f);
+		return (p * r + eye * (1.0f - u)) / (1.0f + u * (r - 1.0f));
+	}
 	if (eye.x == 0.0f && eye.y == 0.0f)
-		return vec2(0.0f);
+		return p;
 	float f;
 	if (VRStereo.w != 0.0f)
 		f = clamp(1.0f - (z_ndc * VRStereo2.x) / max(VRStereo.z, 1e-6f), 0.0f, 1.0f);
 	else
 		f = max(0.0f, 1.0f - VRStereo.z * q);
-	return eye * f;
+	return p + eye * f;
 }
 
 layout(location = 0) out VSOutput
@@ -89,7 +100,7 @@ void main()
 	gl_Position.z *= exp2(-32.0f);		// integer->float depth
 	gl_Position.y = -gl_Position.y;
 #if !VS_FST
-	gl_Position.xy += VRStereoShift(a_q, gl_Position.z);
+	gl_Position.xy = VRStereoPlace(gl_Position.xy, a_q, gl_Position.z);
 #endif
 
 #if GPU_PROFILE_MALI
@@ -201,7 +212,7 @@ ProcessedVertex load_vertex(uint index)
 	vtx.p.z *= exp2(-32.0f);		// integer->float depth
 	vtx.p.y = -vtx.p.y;
 #if !VS_FST
-	vtx.p.xy += VRStereoShift(a_q, vtx.p.z);
+	vtx.p.xy = VRStereoPlace(vtx.p.xy, a_q, vtx.p.z);
 #endif
 
 	#if VS_TME

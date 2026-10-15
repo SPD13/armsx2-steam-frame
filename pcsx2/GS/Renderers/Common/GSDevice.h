@@ -1114,7 +1114,8 @@ struct alignas(16) GSHWDrawConfig
 		u32 max_depth;
 		float line_aa1_width;
 		// GSVolumetric stereo: xy = this eye's shift for the farthest geometry (0 = off),
-		// z = convergence, w = 1 for Z mode; vr_stereo2.x = integer-scaled depth to 0..1 of the Z format.
+		// z = convergence, w = 1 for Z mode or minus the left eye's distance ratio for the portal;
+		// vr_stereo2.x = integer-scaled depth to 0..1 of the Z format, w = the right eye's ratio (portal).
 		GSVector4 vr_stereo;
 		GSVector4 vr_stereo2;
 		__fi VSConstantBuffer()

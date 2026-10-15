@@ -35,20 +35,21 @@ int GSVolumetric::CurrentEye()
 
 // Written by the host thread, read by the GS thread per draw; a torn update only mixes two
 // consecutive head positions.
-static std::atomic<float> s_eye_view[2][3] = {};
+static std::atomic<float> s_eye_view[2][4] = {};
 
-void GSVolumetric::SetEyeView(int eye, float offset_x, float offset_y, float depth_factor)
+void GSVolumetric::SetEyeView(int eye, float offset_x, float offset_y, float depth_factor, float distance_ratio)
 {
 	s_eye_view[eye][0].store(offset_x, std::memory_order_relaxed);
 	s_eye_view[eye][1].store(offset_y, std::memory_order_relaxed);
 	s_eye_view[eye][2].store(depth_factor, std::memory_order_relaxed);
+	s_eye_view[eye][3].store(distance_ratio, std::memory_order_relaxed);
 }
 
 GSVector4 GSVolumetric::EyeShift(int eye)
 {
 	const float k = s_eye_view[eye][2].load(std::memory_order_relaxed);
 	return GSVector4(s_eye_view[eye][0].load(std::memory_order_relaxed) * k,
-		s_eye_view[eye][1].load(std::memory_order_relaxed) * k, 0.0f, 0.0f);
+		s_eye_view[eye][1].load(std::memory_order_relaxed) * k, s_eye_view[eye][3].load(std::memory_order_relaxed), 0.0f);
 }
 
 static std::mutex s_present_dump_mutex;

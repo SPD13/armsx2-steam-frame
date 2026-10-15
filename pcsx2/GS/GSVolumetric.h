@@ -73,21 +73,33 @@ namespace GSVolumetric
 	// With multiview, both eyes are drawn in every frame instead: every render target gets one layer
 	// per eye and every draw is a VK_KHR_multiview draw that applies each eye's shift to its own
 	// layer. Needs the Vulkan renderer, and is fixed when the GS device is created.
+	//
+	// Portal (Z mode only, the host's "Volumetric+"): the scene gets a fixed size in the room instead
+	// of a fixed depth range. The game's camera is taken to be where the viewer stood at the nominal
+	// distance D0, so Znorm at the convergence is on the glass and u = Znorm / convergence (Z ~ 1/w)
+	// puts geometry D0 (1/u - 1) behind it, out to infinity at u = 0. Every vertex is then projected
+	// onto the glass from the eye's real position, toward and away from the screen too:
+	//   r = D / D0, den = 1 + u (r - 1), p' = (p r + eye_offset (1 - u)) / den
+	// p is the vertex in NDC. At D = D0 this is the window shift with a depth factor of 1; leaning in
+	// shrinks far scenery toward the centre (more of the world shows through the window), near
+	// scenery stays put on the glass.
 	struct StereoSettings
 	{
 		bool enabled = false;
 		bool z_mode = false;
 		float convergence = 1.0f;
 		bool multiview = false;
+		bool portal = false;
 	};
 	void SetStereo(const StereoSettings& settings);
 	const StereoSettings& GetStereo();
 	int CurrentEye(); // 0 left, 1 right
 	// Per eye, set by the host every frame: its offset from the screen centre in NDC (x right, y
 	// down, as the eye would see the screen move) and the depth factor R / (D + R) for geometry R
-	// behind a screen D away.
-	void SetEyeView(int eye, float offset_x, float offset_y, float depth_factor);
-	// The eye's on-screen shift for the farthest geometry (offset times depth factor), in x and y.
+	// behind a screen D away (1 in portal mode), and for the portal its distance over the nominal one.
+	void SetEyeView(int eye, float offset_x, float offset_y, float depth_factor, float distance_ratio = 1.0f);
+	// The eye's on-screen shift for the farthest geometry (offset times depth factor), in x and y, and
+	// its distance ratio in z.
 	GSVector4 EyeShift(int eye);
 
 	// Debugging: at the next present, write <prefix>-left.png / -right.png (the images handed to the
