@@ -5,6 +5,7 @@
 // right-eye images handed to the host with each libretro frame. Upstream GSDeviceVK.cpp only calls
 // into these functions, so that merging upstream meets one-line hooks rather than this code.
 
+#include "GS/GSPerfMon.h"
 #include "GS/GSVolumetric.h"
 #include "GS/Renderers/Vulkan/GSDeviceVK.h"
 #include "GS/Renderers/Vulkan/VKBuilders.h"
@@ -426,6 +427,13 @@ void GSDeviceVK::LogMultiviewRestartStats()
 	const u64 passes = m_render_pass_serial - s_restart_stats.passes_at_last_log;
 	Console.WriteLn("VK stereo: per present %.1f render passes, %.1f restarts for VS constants, %.1f for PS constants",
 		static_cast<float>(passes) / 600.0f, s_restart_stats.vs / 600.0f, s_restart_stats.ps / 600.0f);
+	// What else the frames cost the GPU (GSPerfMon, per frame over its last period).
+	Console.WriteLn("VK stats: per frame %.0f draw calls, %.1f Mpx pass area, %.0f barriers, %.1f texture copies, "
+					"%.1f uploads, %.1f readbacks, %.2f blocking GPU waits, %.1f hash cache misses, %.0f pipeline switches",
+		g_perfmon.Get(GSPerfMon::DrawCalls), g_perfmon.Get(GSPerfMon::RenderPassAreaPixels) / 1e6,
+		g_perfmon.Get(GSPerfMon::Barriers), g_perfmon.Get(GSPerfMon::TextureCopies), g_perfmon.Get(GSPerfMon::TextureUploads),
+		g_perfmon.Get(GSPerfMon::Readbacks), g_perfmon.Get(GSPerfMon::GpuBlockingWaits),
+		g_perfmon.Get(GSPerfMon::HashCacheMiss), g_perfmon.Get(GSPerfMon::PipelineSwitches));
 	s_restart_stats = {};
 	s_restart_stats.passes_at_last_log = m_render_pass_serial;
 }
