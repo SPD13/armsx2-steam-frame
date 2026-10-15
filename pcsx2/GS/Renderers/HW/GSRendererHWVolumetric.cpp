@@ -13,6 +13,7 @@
 #include "fmt/format.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 
 void GSRendererHW::RecordDepthPairing(GSTextureCache::Target* rt, GSTextureCache::Target* ds)
@@ -77,10 +78,13 @@ void GSRendererHW::SnapshotDepthBeforeDraw()
 	}
 }
 
-// Copies a whole target into `copy` (recreated when the size changes) with the given format.
-static bool CopyTarget(GSTexture* src, GSTexture*& copy, GSTexture::Format format)
+// Copies a whole target into `copy` (recreated when the size changes) with the given format, shrunk
+// by `shrink` (nearest samples).
+static bool CopyTarget(GSTexture* src, GSTexture*& copy, GSTexture::Format format, float shrink = 1.0f)
 {
-	const GSVector2i size = src->GetSize();
+	const GSVector2i full = src->GetSize();
+	const GSVector2i size(std::max(1, static_cast<int>(std::ceil(full.x / shrink))),
+		std::max(1, static_cast<int>(std::ceil(full.y / shrink))));
 	if (copy && (copy->GetWidth() != size.x || copy->GetHeight() != size.y))
 	{
 		g_gs_device->Recycle(copy);
@@ -102,13 +106,17 @@ void GSRendererHW::SnapshotDepth(GSVolumetricDepthPairing& pairing)
 	if (m_vr.depth_trace_frame)
 		Console.WriteLnFmt("DepthTrace:   SNAPSHOT rt {:05x} z {:05x}", pairing.rt_bp, pairing.z_bp);
 	GSTextureCache::Target* ds = g_texture_cache->FindExactTarget(pairing.z_bp, pairing.z_bw, GSTextureCache::DepthStencil);
-	if (!ds || !ds->m_texture || !CopyTarget(ds->m_texture, pairing.snapshot, GSTexture::Format::DepthColor))
+	// Without the extras, the snapshot only feeds the guns' depth: taken at the PS2's resolution.
+	const bool extras = GSVolumetric::DepthExtras();
+	const float shrink = (!extras && ds && ds->m_scale > 1.0f) ? ds->m_scale : 1.0f;
+	if (!ds || !ds->m_texture || !CopyTarget(ds->m_texture, pairing.snapshot, GSTexture::Format::DepthColor, shrink))
 		return;
-	pairing.snapshot_scale = ds->m_scale;
+	pairing.snapshot_scale = ds->m_scale * static_cast<float>(pairing.snapshot->GetWidth()) /
+	                         static_cast<float>(ds->m_texture->GetWidth());
 	pairing.snapshot_vsync = m_vr.depth_vsync;
 
 	GSTextureCache::Target* rt = g_texture_cache->FindExactTarget(pairing.rt_bp, pairing.rt_bw, GSTextureCache::RenderTarget);
-	if (rt && rt->m_texture && rt->m_texture->GetFormat() == GSTexture::Format::Color &&
+	if (extras && rt && rt->m_texture && rt->m_texture->GetFormat() == GSTexture::Format::Color &&
 		CopyTarget(rt->m_texture, pairing.colour_snapshot, GSTexture::Format::Color))
 		pairing.colour_snapshot_scale = rt->m_scale;
 	else if (pairing.colour_snapshot)
@@ -233,14 +241,22 @@ void GSRendererHW::MergeDepth(GSTexture* const* tex, const GSVector4* src_gs_rea
 
 	const u32 ring = m_vr.depth_canvas_index;
 	m_vr.depth_canvas_index = (m_vr.depth_canvas_index + 1) % static_cast<u32>(m_vr.depth_canvas.size());
-	const auto canvas_for = [&fs](GSTexture*& canvas, GSTexture::Format format) {
-		if (canvas && (canvas->GetWidth() != fs.x || canvas->GetHeight() != fs.y))
+	// Without the extras, the depth canvas is shrunk to the PS2's resolution; the host samples it by
+	// UV, so its size does not matter there.
+	const bool extras = GSVolumetric::DepthExtras();
+	const float shrink = (!extras && rt->m_scale > 1.0f) ? rt->m_scale : 1.0f;
+	const GSVector2i canvas_size(std::max(1, static_cast<int>(std::ceil(fs.x / shrink))),
+		std::max(1, static_cast<int>(std::ceil(fs.y / shrink))));
+	const GSVector4 depth_dst = dst[c] * GSVector4(static_cast<float>(canvas_size.x) / static_cast<float>(fs.x),
+		static_cast<float>(canvas_size.y) / static_cast<float>(fs.y)).xyxy();
+	const auto canvas_for = [&](GSTexture*& canvas, GSTexture::Format format, const GSVector2i& size) {
+		if (canvas && (canvas->GetWidth() != size.x || canvas->GetHeight() != size.y))
 		{
 			g_gs_device->Recycle(canvas);
 			canvas = nullptr;
 		}
 		if (!canvas)
-			canvas = g_gs_device->CreateRenderTarget(fs.x, fs.y, format, false);
+			canvas = g_gs_device->CreateRenderTarget(size.x, size.y, format, false);
 		if (canvas)
 			g_gs_device->ClearRenderTarget(canvas, 0);
 		return canvas;
@@ -253,15 +269,15 @@ void GSRendererHW::MergeDepth(GSTexture* const* tex, const GSVector4* src_gs_rea
 		return src_px * GSVector4(scale / rt->m_scale) / GSVector4(src->GetSize()).xyxy();
 	};
 
-	GSTexture* canvas = canvas_for(m_vr.depth_canvas[ring], GSTexture::Format::DepthColor);
+	GSTexture* canvas = canvas_for(m_vr.depth_canvas[ring], GSTexture::Format::DepthColor, canvas_size);
 	if (!canvas)
 		return;
-	g_gs_device->StretchRect(depth_src, src_rect(depth_src, depth_scale), canvas, dst[c],
+	g_gs_device->StretchRect(depth_src, src_rect(depth_src, depth_scale), canvas, depth_dst,
 		GetConvertShader(depth_format, GSTexture::Format::DepthColor), Filter::Nearest);
 
-	if (prehud_src)
+	if (prehud_src && extras)
 	{
-		if (GSTexture* prehud = canvas_for(m_vr.prehud_canvas[ring], GSTexture::Format::Color))
+		if (GSTexture* prehud = canvas_for(m_vr.prehud_canvas[ring], GSTexture::Format::Color, fs))
 		{
 			g_gs_device->StretchRect(prehud_src, src_rect(prehud_src, prehud_scale), prehud, dst[c],
 				GetConvertShader(GSTexture::Format::Color, GSTexture::Format::Color), Filter::Nearest);
@@ -269,10 +285,10 @@ void GSRendererHW::MergeDepth(GSTexture* const* tex, const GSVector4* src_gs_rea
 		}
 	}
 
-	if (fresh_snapshot)
+	if (fresh_snapshot && extras)
 	{
 		GSTextureCache::Target* ds = g_texture_cache->FindExactTarget(pairing->z_bp, pairing->z_bw, GSTextureCache::DepthStencil);
-		GSTexture* live = ds && ds->m_texture ? canvas_for(m_vr.live_depth_canvas[ring], GSTexture::Format::DepthColor) : nullptr;
+		GSTexture* live = ds && ds->m_texture ? canvas_for(m_vr.live_depth_canvas[ring], GSTexture::Format::DepthColor, fs) : nullptr;
 		if (live)
 		{
 			g_gs_device->StretchRect(ds->m_texture, src_rect(ds->m_texture, ds->m_scale), live, dst[c],

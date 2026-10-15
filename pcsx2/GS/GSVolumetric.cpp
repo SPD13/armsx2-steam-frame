@@ -109,6 +109,18 @@ bool GSVolumetric::IsEnabled()
 	return s_volumetric_enabled.load(std::memory_order_relaxed);
 }
 
+static std::atomic<bool> s_depth_extras{false};
+
+void GSVolumetric::SetDepthExtras(bool enabled)
+{
+	s_depth_extras.store(enabled, std::memory_order_relaxed);
+}
+
+bool GSVolumetric::DepthExtras()
+{
+	return s_depth_extras.load(std::memory_order_relaxed);
+}
+
 GSVolumetricFrame& GSVolumetric::CurrentFrame()
 {
 	return s_volumetric_frame;

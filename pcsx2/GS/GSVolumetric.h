@@ -53,6 +53,11 @@ namespace GSVolumetric
 	// (depth then starts with the next frames drawn).
 	void SetEnabled(bool enabled);
 	bool IsEnabled();
+	// The pre-HUD colour and live depth canvases besides the depth, at the upscaled resolution. Off by
+	// default: the light guns only sample the depth, which is then kept at the PS2's own resolution
+	// (a few hundred pixels across is plenty for aiming, and copies at 3x cost real GPU time).
+	void SetDepthExtras(bool enabled);
+	bool DepthExtras();
 
 	// Logs, every 300 vsyncs, which colour/depth targets the Z-writing draws used.
 	void SetTrace(bool enabled);
