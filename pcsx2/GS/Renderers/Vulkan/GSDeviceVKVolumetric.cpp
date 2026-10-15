@@ -15,8 +15,10 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace
@@ -161,7 +163,71 @@ GSTextureVK* GSDeviceVK::PrepareVolumetricPresent(VkCommandBuffer cmdbuffer, GST
 	if (live_depth)
 		live_depth->TransitionToLayout(cmdbuffer, GSTextureVK::Layout::ShaderReadOnly);
 	GSTextureVK* bb_right = (VKLibretro::Active && IsMultiview()) ? PresentRightEye(cmdbuffer, bb, bb_index) : nullptr;
+	LogMultiviewRestartStats();
+	RecordPresentCopies(cmdbuffer, bb, bb_right);
 	return bb_right;
+}
+
+// The present copy (VKLibretro::ArmPresentCopy): this present's copies into the frontend's images,
+// reported in the frame it publishes.
+static bool s_present_copy_taken = false;
+static u64 s_present_copied[2] = {};
+
+// Copies src into the target at the end of the present: after everything this frame drew, ahead of
+// whatever the GS submits next. The target is left in COLOR_ATTACHMENT_OPTIMAL, as an XR swapchain
+// image is handed back to the runtime.
+static bool CopyToPresentTarget(VkCommandBuffer cmd, GSTextureVK* src, const VKLibretro::PresentCopyTarget& target)
+{
+	if (!src || !target.image || target.width != static_cast<u32>(src->GetWidth()) ||
+		target.height != static_cast<u32>(src->GetHeight()))
+		return false;
+	src->TransitionToLayout(cmd, GSTextureVK::Layout::TransferSrc);
+	const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+	VkImageMemoryBarrier to_dst{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+	to_dst.srcAccessMask = 0;
+	to_dst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+	to_dst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	to_dst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+	to_dst.srcQueueFamilyIndex = to_dst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	to_dst.image = target.image;
+	to_dst.subresourceRange = range;
+	vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr,
+		1, &to_dst);
+	VkImageCopy region{};
+	region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+	region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+	region.extent = {target.width, target.height, 1};
+	vkCmdCopyImage(cmd, src->GetImage(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, target.image,
+		VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+	VkImageMemoryBarrier to_runtime = to_dst;
+	to_runtime.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+	to_runtime.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
+	to_runtime.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+	to_runtime.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+	vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0,
+		nullptr, 1, &to_runtime);
+	src->TransitionToLayout(cmd, GSTextureVK::Layout::ShaderReadOnly);
+	return true;
+}
+
+void GSDeviceVK::RecordPresentCopies(VkCommandBuffer cmdbuffer, GSTextureVK* bb, GSTextureVK* bb_right)
+{
+	s_present_copied[0] = s_present_copied[1] = 0;
+	VKLibretro::PresentCopyTarget left, right;
+	s_present_copy_taken = VKLibretro::Active && VKLibretro::TakePresentCopy(&left, &right);
+	if (!s_present_copy_taken)
+		return;
+	if (CopyToPresentTarget(cmdbuffer, bb, left))
+		s_present_copied[0] = left.id;
+	if (CopyToPresentTarget(cmdbuffer, bb_right, right))
+		s_present_copied[1] = right.id;
+}
+
+void GSDeviceVK::FinishPresentCopies()
+{
+	// The command buffer with the copies is submitted: the frontend may release the images.
+	if (std::exchange(s_present_copy_taken, false))
+		VKLibretro::FinishPresentCopy();
 }
 
 void GSDeviceVK::FillVolumetricFrame(VKLibretro::Frame& frame, GSTextureVK* bb, GSTextureVK* bb_right)
@@ -171,6 +237,8 @@ void GSDeviceVK::FillVolumetricFrame(VKLibretro::Frame& frame, GSTextureVK* bb, 
 	GSTextureVK* prehud = depth ? static_cast<GSTextureVK*>(volumetric.prehud) : nullptr;
 	GSTextureVK* live_depth = depth ? static_cast<GSTextureVK*>(volumetric.live_depth) : nullptr;
 	frame.stereo_eye = volumetric.stereo_eye;
+	frame.copied_left = std::exchange(s_present_copied[0], 0);
+	frame.copied_right = std::exchange(s_present_copied[1], 0);
 	frame.draw_rect[0] = volumetric.draw_rect.x, frame.draw_rect[1] = volumetric.draw_rect.y;
 	frame.draw_rect[2] = volumetric.draw_rect.z, frame.draw_rect[3] = volumetric.draw_rect.w;
 	if (bb_right)
@@ -242,7 +310,44 @@ void GSDeviceVK::CheckStereoRenderPass(VkRenderPass rp)
 	}
 }
 
-void GSDeviceVK::RestartMultiviewPassForNewConstants()
+// Profiling: how many passes the frames have, how many restarts the VS and PS constants cause, and
+// $PS2V_MV_RESTART to drop restarts for a measurement ("vs": only for VS constants, "none": never;
+// either brings the corruption back where the driver bug strikes).
+namespace
+{
+	struct RestartStats
+	{
+		u32 vs = 0, ps = 0;
+		u64 passes_at_last_log = 0;
+		u32 presents = 0;
+	};
+	RestartStats s_restart_stats;
+	int RestartMode() // 2 both, 1 VS only, 0 none
+	{
+		static const int mode = [] {
+			const char* env = std::getenv("PS2V_MV_RESTART");
+			const int m = !env ? 2 : !std::strcmp(env, "vs") ? 1 : !std::strcmp(env, "none") ? 0 : 2;
+			if (m != 2)
+				Console.Warning("VK stereo: multiview pass restarts %s ($PS2V_MV_RESTART)", m ? "for VS constants only" : "off");
+			return m;
+		}();
+		return mode;
+	}
+} // namespace
+
+void GSDeviceVK::LogMultiviewRestartStats()
+{
+	// Every 600 presents (10 s at 60 fps).
+	if (!IsMultiview() || ++s_restart_stats.presents < 600)
+		return;
+	const u64 passes = m_render_pass_serial - s_restart_stats.passes_at_last_log;
+	Console.WriteLn("VK stereo: per present %.1f render passes, %.1f restarts for VS constants, %.1f for PS constants",
+		static_cast<float>(passes) / 600.0f, s_restart_stats.vs / 600.0f, s_restart_stats.ps / 600.0f);
+	s_restart_stats = {};
+	s_restart_stats.passes_at_last_log = m_render_pass_serial;
+}
+
+void GSDeviceVK::RestartMultiviewPassForNewConstants(bool vertex_constants)
 {
 	// GSVolumetric multiview stereo: inside a multiview render pass, Turnip (Adreno 750, Mesa 26.3)
 	// does not reliably apply a new dynamic offset of the constant buffers to the following draws;
@@ -252,6 +357,9 @@ void GSDeviceVK::RestartMultiviewPassForNewConstants()
 	// offset, so restart the open pass in place: same framebuffer, contents loaded.
 	if (!IsMultiview() || !InRenderPass())
 		return;
+	if (RestartMode() < (vertex_constants ? 1 : 2))
+		return;
+	(vertex_constants ? s_restart_stats.vs : s_restart_stats.ps)++;
 	const VkRenderPass pass = m_current_render_pass;
 	const GSVector4i area = m_current_render_pass_area;
 	EndRenderPass();

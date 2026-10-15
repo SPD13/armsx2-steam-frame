@@ -3570,6 +3570,7 @@ void GSDeviceVK::EndPresent()
 		g_perfmon.Put(GSPerfMon::RenderPasses, 1);
 
 		SubmitCommandBuffer(static_cast<VKSwapChain*>(nullptr));
+		FinishPresentCopies();
 		MoveToNextCommandBuffer();
 		InvalidateCachedState();
 
@@ -9278,7 +9279,7 @@ void GSDeviceVK::SetVSConstantBuffer(const GSHWDrawConfig::VSConstantBuffer& cb)
 	if (m_vs_cb_cache.Update(cb))
 	{
 		m_dirty_flags |= DIRTY_FLAG_VS_CONSTANT_BUFFER;
-		RestartMultiviewPassForNewConstants();
+		RestartMultiviewPassForNewConstants(true);
 	}
 }
 
@@ -9287,7 +9288,7 @@ void GSDeviceVK::SetPSConstantBuffer(const GSHWDrawConfig::PSConstantBuffer& cb)
 	if (m_ps_cb_cache.Update(cb))
 	{
 		m_dirty_flags |= DIRTY_FLAG_PS_CONSTANT_BUFFER;
-		RestartMultiviewPassForNewConstants();
+		RestartMultiviewPassForNewConstants(false);
 	}
 }
 

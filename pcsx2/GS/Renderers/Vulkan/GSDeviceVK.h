@@ -996,7 +996,10 @@ public:
 	// ARMSX2 VR multiview stereo and libretro frame export, in GSDeviceVKVolumetric.cpp.
 	void EnableStereoMultiview(VkDeviceCreateInfo& device_info, VkPhysicalDeviceMultiviewFeatures& multiview_feature);
 	void CheckStereoRenderPass(VkRenderPass rp);
-	void RestartMultiviewPassForNewConstants();
+	void RestartMultiviewPassForNewConstants(bool vertex_constants);
+	void LogMultiviewRestartStats();
+	void RecordPresentCopies(VkCommandBuffer cmdbuffer, GSTextureVK* bb, GSTextureVK* bb_right);
+	void FinishPresentCopies();
 	GSTextureVK* PresentRightEye(VkCommandBuffer cmdbuffer, GSTextureVK* bb, int bb_index);
 	GSTextureVK* PrepareVolumetricPresent(VkCommandBuffer cmdbuffer, GSTextureVK* bb, int bb_index);
 	void FillVolumetricFrame(VKLibretro::Frame& frame, GSTextureVK* bb, GSTextureVK* bb_right);
