@@ -999,6 +999,8 @@ public:
 	void RestartMultiviewPassForNewConstants(bool vertex_constants);
 	void LogMultiviewRestartStats();
 	void RecordPresentCopies(VkCommandBuffer cmdbuffer, GSTextureVK* bb, GSTextureVK* bb_right);
+	GSTextureVK* TakePresentTargets(GSTextureVK* bb);
+	GSTextureVK* PresentTarget(GSTextureVK* bb);
 	void FinishPresentCopies();
 	GSTextureVK* PresentRightEye(VkCommandBuffer cmdbuffer, GSTextureVK* bb, int bb_index);
 	GSTextureVK* PrepareVolumetricPresent(VkCommandBuffer cmdbuffer, GSTextureVK* bb, int bb_index);

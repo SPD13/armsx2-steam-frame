@@ -32,7 +32,57 @@ namespace
 	u64 s_right_presents = 0;
 	constexpr u64 kRetireFrames = 6;
 	constexpr VkClearValue s_clear_color = {{{0.0f, 0.0f, 0.0f, 1.0f}}};
+
+	// The present into the frontend's images (VKLibretro::ArmPresentCopy): the targets this present
+	// took, the wrappers through which it draws straight into those of its size (through an RGBA8
+	// UNORM view: the GS writes sRGB-encoded values, as the frontend's sRGB images expect), and the
+	// ids it reports. $PS2V_NO_DIRECT_PRESENT copies into them instead, for a measurement.
+	VKLibretro::PresentCopyTarget s_present_target[2];
+	std::unique_ptr<GSTextureVK> s_direct_tex[2];
+	bool s_present_copy_taken = false;
+	u64 s_present_copied[2] = {};
+	bool DirectPresentAllowed()
+	{
+		static const bool allowed = [] {
+			const bool a = !std::getenv("PS2V_NO_DIRECT_PRESENT");
+			if (!a)
+				Console.Warning("VK stereo: presenting into the frontend's images by copies ($PS2V_NO_DIRECT_PRESENT)");
+			return a;
+		}();
+		return allowed;
+	}
 } // namespace
+
+GSTextureVK* GSDeviceVK::TakePresentTargets(GSTextureVK* bb)
+{
+	// The last present's wrappers: its command buffer is submitted, and their views and framebuffers
+	// are destroyed once the GPU is done with it. The images belong to the frontend.
+	s_direct_tex[0].reset();
+	s_direct_tex[1].reset();
+	s_present_copied[0] = s_present_copied[1] = 0;
+	s_present_target[0] = s_present_target[1] = VKLibretro::PresentCopyTarget();
+	s_present_copy_taken =
+		VKLibretro::Active && VKLibretro::TakePresentCopy(&s_present_target[0], &s_present_target[1]);
+	if (!s_present_copy_taken || !DirectPresentAllowed())
+		return bb;
+	for (int eye = 0; eye < 2; eye++)
+	{
+		const VKLibretro::PresentCopyTarget& t = s_present_target[eye];
+		if (t.image && t.drawable && t.width == static_cast<u32>(bb->GetWidth()) &&
+			t.height == static_cast<u32>(bb->GetHeight()))
+		{
+			s_direct_tex[eye] = GSTextureVK::Adopt(t.image, GSTexture::RenderTarget, GSTexture::Format::Color,
+				bb->GetWidth(), bb->GetHeight(), 1, VK_FORMAT_R8G8B8A8_UNORM);
+		}
+	}
+	return PresentTarget(bb);
+}
+
+GSTextureVK* GSDeviceVK::PresentTarget(GSTextureVK* bb)
+{
+	return s_direct_tex[0] ? s_direct_tex[0].get() : bb;
+}
+
 
 void GSDeviceVK::EnableStereoMultiview(VkDeviceCreateInfo& device_info, VkPhysicalDeviceMultiviewFeatures& multiview_feature)
 {
@@ -63,6 +113,9 @@ void GSDeviceVK::ReleaseStereoBackbuffers()
 		bb.reset();
 	s_bb_right_retired.clear();
 	s_right_presents = 0;
+	// The wrappers of the frontend's images, before the device goes (not at static destruction).
+	s_direct_tex[0].reset();
+	s_direct_tex[1].reset();
 }
 
 GSTextureVK* GSDeviceVK::PresentRightEye(VkCommandBuffer cmdbuffer, GSTextureVK* bb, int bb_index)
@@ -84,14 +137,21 @@ GSTextureVK* GSDeviceVK::PresentRightEye(VkCommandBuffer cmdbuffer, GSTextureVK*
 
 	if (bb_index < 0 || bb_index >= kBackbuffers)
 		return nullptr;
-	std::unique_ptr<GSTextureVK>& right = s_bb_right[bb_index];
-	if (!right || right->GetWidth() != bb->GetWidth() || right->GetHeight() != bb->GetHeight())
+	// Straight into the frontend's image when it armed one of this size, else a backbuffer of our own.
+	GSTextureVK* right = s_direct_tex[1].get();
+	const bool direct = right && right->GetWidth() == bb->GetWidth() && right->GetHeight() == bb->GetHeight();
+	if (!direct)
 	{
-		if (right)
-			s_bb_right_retired.push_back({std::move(right), s_right_presents});
-		right = GSTextureVK::Create(GSTexture::RenderTarget, GSTexture::Format::Color, bb->GetWidth(), bb->GetHeight(), 1);
-		if (!right)
-			return nullptr;
+		std::unique_ptr<GSTextureVK>& own = s_bb_right[bb_index];
+		if (!own || own->GetWidth() != bb->GetWidth() || own->GetHeight() != bb->GetHeight())
+		{
+			if (own)
+				s_bb_right_retired.push_back({std::move(own), s_right_presents});
+			own = GSTextureVK::Create(GSTexture::RenderTarget, GSTexture::Format::Color, bb->GetWidth(), bb->GetHeight(), 1);
+			if (!own)
+				return nullptr;
+		}
+		right = own.get();
 	}
 
 	right->TransitionToLayout(cmdbuffer, GSTextureVK::Layout::TransferDst);
@@ -99,28 +159,44 @@ GSTextureVK* GSDeviceVK::PresentRightEye(VkCommandBuffer cmdbuffer, GSTextureVK*
 	vkCmdClearColorImage(cmdbuffer, right->GetImage(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 		&s_clear_color.color, 1, &range);
 
-	// The draw rectangle can reach outside the backbuffer (zoom, overscan); a blit cannot, so clip
-	// it and move the source edges with it.
 	const GSVector4i& src = s_geometry.src_rect;
 	const GSVector4& dst = s_geometry.draw_rect;
-	const float cx0 = std::max(dst.x, 0.0f), cy0 = std::max(dst.y, 0.0f);
-	const float cx1 = std::min(dst.z, static_cast<float>(bb->GetWidth()));
-	const float cy1 = std::min(dst.w, static_cast<float>(bb->GetHeight()));
-	if (cx1 > cx0 && cy1 > cy0 && dst.z > dst.x && dst.w > dst.y)
+	if (direct)
 	{
-		const float sx = static_cast<float>(src.z - src.x) / (dst.z - dst.x);
-		const float sy = static_cast<float>(src.w - src.y) / (dst.w - dst.y);
-		const GSVector4i s = GSVector4i(static_cast<int>(src.x + (cx0 - dst.x) * sx),
-			static_cast<int>(src.y + (cy0 - dst.y) * sy), static_cast<int>(src.z - (dst.z - cx1) * sx),
-			static_cast<int>(src.w - (dst.w - cy1) * sy)).rintersect(current->GetRect());
-		const GSVector4i d(static_cast<int>(cx0), static_cast<int>(cy0), static_cast<int>(cx1), static_cast<int>(cy1));
-		if (!s.rempty() && !d.rempty())
+		// The frontend's image is sRGB: a blit would encode the GS's sRGB values a second time, so
+		// draw through its UNORM view instead.
+		if (dst.z > dst.x && dst.w > dst.y)
 		{
-			current->TransitionToLayout(cmdbuffer, GSTextureVK::Layout::TransferSrc);
-			const VkImageBlit blit = {{VK_IMAGE_ASPECT_COLOR_BIT, 0u, 1u, 1u}, {{s.x, s.y, 0}, {s.z, s.w, 1}},
-				{VK_IMAGE_ASPECT_COLOR_BIT, 0u, 0u, 1u}, {{d.x, d.y, 0}, {d.z, d.w, 1}}};
-			vkCmdBlitImage(cmdbuffer, current->GetImage(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, right->GetImage(),
-				VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, s_geometry.linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
+			GSTexture* layer = current->GetLayerProxyTexture(1);
+			StretchRect(layer, GSVector4(src) / GSVector4(layer->GetSize()).xyxy(), right, dst, ShaderConvert::COPY,
+				s_geometry.linear ? Filter::Biln : Filter::Nearest);
+			// StretchRect leaves its pass open, as GS draws do; the overlay below begins its own.
+			EndRenderPass();
+		}
+	}
+	else
+	{
+		// The draw rectangle can reach outside the backbuffer (zoom, overscan); a blit cannot, so
+		// clip it and move the source edges with it.
+		const float cx0 = std::max(dst.x, 0.0f), cy0 = std::max(dst.y, 0.0f);
+		const float cx1 = std::min(dst.z, static_cast<float>(bb->GetWidth()));
+		const float cy1 = std::min(dst.w, static_cast<float>(bb->GetHeight()));
+		if (cx1 > cx0 && cy1 > cy0 && dst.z > dst.x && dst.w > dst.y)
+		{
+			const float sx = static_cast<float>(src.z - src.x) / (dst.z - dst.x);
+			const float sy = static_cast<float>(src.w - src.y) / (dst.w - dst.y);
+			const GSVector4i s = GSVector4i(static_cast<int>(src.x + (cx0 - dst.x) * sx),
+				static_cast<int>(src.y + (cy0 - dst.y) * sy), static_cast<int>(src.z - (dst.z - cx1) * sx),
+				static_cast<int>(src.w - (dst.w - cy1) * sy)).rintersect(current->GetRect());
+			const GSVector4i d(static_cast<int>(cx0), static_cast<int>(cy0), static_cast<int>(cx1), static_cast<int>(cy1));
+			if (!s.rempty() && !d.rempty())
+			{
+				current->TransitionToLayout(cmdbuffer, GSTextureVK::Layout::TransferSrc);
+				const VkImageBlit blit = {{VK_IMAGE_ASPECT_COLOR_BIT, 0u, 1u, 1u}, {{s.x, s.y, 0}, {s.z, s.w, 1}},
+					{VK_IMAGE_ASPECT_COLOR_BIT, 0u, 0u, 1u}, {{d.x, d.y, 0}, {d.z, d.w, 1}}};
+				vkCmdBlitImage(cmdbuffer, current->GetImage(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, right->GetImage(),
+					VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, s_geometry.linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
+			}
 		}
 	}
 
@@ -146,7 +222,7 @@ GSTextureVK* GSDeviceVK::PresentRightEye(VkCommandBuffer cmdbuffer, GSTextureVK*
 	}
 
 	right->TransitionToLayout(cmdbuffer, GSTextureVK::Layout::ShaderReadOnly);
-	return right.get();
+	return right;
 }
 
 GSTextureVK* GSDeviceVK::PrepareVolumetricPresent(VkCommandBuffer cmdbuffer, GSTextureVK* bb, int bb_index)
@@ -167,11 +243,6 @@ GSTextureVK* GSDeviceVK::PrepareVolumetricPresent(VkCommandBuffer cmdbuffer, GST
 	RecordPresentCopies(cmdbuffer, bb, bb_right);
 	return bb_right;
 }
-
-// The present copy (VKLibretro::ArmPresentCopy): this present's copies into the frontend's images,
-// reported in the frame it publishes.
-static bool s_present_copy_taken = false;
-static u64 s_present_copied[2] = {};
 
 // Copies src into the target at the end of the present: after everything this frame drew, ahead of
 // whatever the GS submits next. The target is left in COLOR_ATTACHMENT_OPTIMAL, as an XR swapchain
@@ -203,7 +274,8 @@ static bool CopyToPresentTarget(VkCommandBuffer cmd, GSTextureVK* src, const VKL
 	to_runtime.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
 	to_runtime.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
 	to_runtime.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-	to_runtime.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+	to_runtime.newLayout =
+		target.readable ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 	vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0,
 		nullptr, 1, &to_runtime);
 	src->TransitionToLayout(cmd, GSTextureVK::Layout::ShaderReadOnly);
@@ -212,15 +284,26 @@ static bool CopyToPresentTarget(VkCommandBuffer cmd, GSTextureVK* src, const VKL
 
 void GSDeviceVK::RecordPresentCopies(VkCommandBuffer cmdbuffer, GSTextureVK* bb, GSTextureVK* bb_right)
 {
-	s_present_copied[0] = s_present_copied[1] = 0;
-	VKLibretro::PresentCopyTarget left, right;
-	s_present_copy_taken = VKLibretro::Active && VKLibretro::TakePresentCopy(&left, &right);
 	if (!s_present_copy_taken)
 		return;
-	if (CopyToPresentTarget(cmdbuffer, bb, left))
-		s_present_copied[0] = left.id;
-	if (CopyToPresentTarget(cmdbuffer, bb_right, right))
-		s_present_copied[1] = right.id;
+	for (int eye = 0; eye < 2; eye++)
+	{
+		const VKLibretro::PresentCopyTarget& target = s_present_target[eye];
+		GSTextureVK* const src = eye ? bb_right : bb;
+		if (!target.image || !src)
+			continue;
+		if (src == s_direct_tex[eye].get())
+		{
+			// Drawn straight into it: only the layout the frontend gets it in.
+			src->TransitionToLayout(cmdbuffer,
+				target.readable ? GSTextureVK::Layout::ComputeReadOnly : GSTextureVK::Layout::ColorAttachment);
+			s_present_copied[eye] = target.id;
+		}
+		else if (CopyToPresentTarget(cmdbuffer, src, target))
+		{
+			s_present_copied[eye] = target.id;
+		}
+	}
 }
 
 void GSDeviceVK::FinishPresentCopies()

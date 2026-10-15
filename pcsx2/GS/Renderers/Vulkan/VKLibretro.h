@@ -114,6 +114,12 @@ namespace VKLibretro
 		VkImage image = VK_NULL_HANDLE; // RGBA8-sized texels, any layout; left in COLOR_ATTACHMENT_OPTIMAL
 		u32 width = 0, height = 0; // copied into only by a frame of exactly this size
 		u64 id = 0; // non-zero, reported back in Frame::copied_left/right
+		// Left in SHADER_READ_ONLY_OPTIMAL instead, for the frontend to sample before it moves the
+		// image to COLOR_ATTACHMENT_OPTIMAL and releases it.
+		bool readable = false;
+		// The GS may draw straight into it through an RGBA8 UNORM view (the image is mutable-format
+		// or UNORM); otherwise it only copies into it.
+		bool drawable = false;
 	};
 	// Frontend: arms the target for an eye (0 left, 1 right), replacing one not yet taken.
 	void ArmPresentCopy(int eye, const PresentCopyTarget& target);

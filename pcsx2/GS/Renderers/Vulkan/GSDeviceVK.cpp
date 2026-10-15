@@ -3418,27 +3418,30 @@ GSDevice::PresentResult GSDeviceVK::DoBeginPresent(bool frame_skip)
 				VkCommandBuffer cmdbuffer = GetCurrentCommandBuffer();
 				if (!frame_skip && m_current)
 					static_cast<GSTextureVK*>(m_current)->TransitionToLayout(GSTextureVK::Layout::ShaderReadOnly);
-				bb->TransitionToLayout(cmdbuffer, GSTextureVK::Layout::ColorAttachment);
+				// ARMSX2 VR: straight into the frontend's image when it armed one of this size.
+				GSTextureVK* const target = TakePresentTargets(bb.get());
+				target->TransitionToLayout(cmdbuffer, GSTextureVK::Layout::ColorAttachment);
 
-				const VkFramebuffer fb = bb->GetFramebuffer(false);
+				const VkFramebuffer fb = target->GetFramebuffer(false);
 				if (fb != VK_NULL_HANDLE)
 				{
 					const VkRenderPassBeginInfo rp = {VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO, nullptr,
-						GetRenderPass(bb->GetVkFormat(), VK_FORMAT_UNDEFINED, VK_ATTACHMENT_LOAD_OP_CLEAR,
+						GetRenderPass(target->GetVkFormat(), VK_FORMAT_UNDEFINED, VK_ATTACHMENT_LOAD_OP_CLEAR,
 							VK_ATTACHMENT_STORE_OP_STORE),
-						fb, {{0, 0}, {static_cast<u32>(bb->GetWidth()), static_cast<u32>(bb->GetHeight())}},
+						fb, {{0, 0}, {static_cast<u32>(target->GetWidth()), static_cast<u32>(target->GetHeight())}},
 						1u, &s_present_clear_color};
 					vkCmdBeginRenderPass(cmdbuffer, &rp, VK_SUBPASS_CONTENTS_INLINE);
 
-					const VkViewport vp{0.0f, 0.0f, static_cast<float>(bb->GetWidth()),
-						static_cast<float>(bb->GetHeight()), 0.0f, 1.0f};
+					const VkViewport vp{0.0f, 0.0f, static_cast<float>(target->GetWidth()),
+						static_cast<float>(target->GetHeight()), 0.0f, 1.0f};
 					const VkRect2D scissor{
-						{0, 0}, {static_cast<u32>(bb->GetWidth()), static_cast<u32>(bb->GetHeight())}};
+						{0, 0}, {static_cast<u32>(target->GetWidth()), static_cast<u32>(target->GetHeight())}};
 					vkCmdSetViewport(cmdbuffer, 0, 1, &vp);
 					vkCmdSetScissor(cmdbuffer, 0, 1, &scissor);
 					m_is_presenting = true;
 					return PresentResult::OK;
 				}
+				FinishPresentCopies(); // no present: the frontend copies the frame itself
 			}
 		}
 
@@ -3564,7 +3567,8 @@ void GSDeviceVK::EndPresent()
 	{
 		// Libretro: finish the backbuffer, submit without any swapchain
 		// semantics, and hand the image to the frontend.
-		GSTextureVK* bb = s_libretro_bb[s_libretro_bb_idx].get();
+		GSTextureVK* const own_bb = s_libretro_bb[s_libretro_bb_idx].get();
+		GSTextureVK* bb = PresentTarget(own_bb); // the frontend's image when drawn straight into it
 		bb->TransitionToLayout(cmdbuffer, GSTextureVK::Layout::ShaderReadOnly);
 		GSTextureVK* bb_right = PrepareVolumetricPresent(cmdbuffer, bb, s_libretro_bb_idx);
 		g_perfmon.Put(GSPerfMon::RenderPasses, 1);
@@ -3582,7 +3586,8 @@ void GSDeviceVK::EndPresent()
 
 		VKLibretro::Frame frame;
 		frame.image = bb->GetImage();
-		frame.view = bb->GetView();
+		// A view of the frontend's own image goes with this present's wrapper: it brings its own.
+		frame.view = bb == own_bb ? bb->GetView() : VK_NULL_HANDLE;
 		frame.format = bb->GetVkFormat();
 		frame.width = static_cast<u32>(bb->GetWidth());
 		frame.height = static_cast<u32>(bb->GetHeight());
@@ -8574,7 +8579,7 @@ void GSDeviceVK::ExecuteCommandBufferAndRestartPresent(bool wait_for_completion,
 	ExecuteCommandBuffer(wait_for_completion);
 
 	GSTextureVK* swap_chain_texture =
-		m_swap_chain ? m_swap_chain->GetCurrentTexture() : s_libretro_bb[s_libretro_bb_idx].get();
+		m_swap_chain ? m_swap_chain->GetCurrentTexture() : PresentTarget(s_libretro_bb[s_libretro_bb_idx].get());
 
 	const VkFramebuffer fb = swap_chain_texture->GetFramebuffer(false);
 	pxAssert(fb);
