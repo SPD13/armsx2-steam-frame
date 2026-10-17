@@ -108,6 +108,25 @@ void GSDeviceVK::EnableStereoMultiview(VkDeviceCreateInfo& device_info, VkPhysic
 	}
 }
 
+// A single-view utility pass writes a layered texture one layer proxy at a time, and the proxies
+// keep their own load state. Hand them the texture's (a pending clear is committed to the whole
+// image; an invalidated texture's layers may be discarded by their first pass, as the texture's
+// would be upstream) and mark the texture written: else it stays Invalidated, and the next pass
+// on it discards what the proxies drew (DONT_CARE), as do texture cache checks of its state.
+void GSDeviceVK::BeginStereoLayerWrite(GSTexture* tex)
+{
+	tex->GetLayerProxyTexture(0); // commits a pending clear
+	const GSTexture::State state =
+		(tex->GetState() == GSTexture::State::Invalidated) ? GSTexture::State::Invalidated : GSTexture::State::Dirty;
+	for (u32 layer = 0; layer < tex->GetArrayLayers(); layer++)
+	{
+		GSTexture* proxy = tex->GetLayerProxyTexture(layer);
+		if (proxy != tex)
+			proxy->SetState(state);
+	}
+	tex->SetState(GSTexture::State::Dirty);
+}
+
 void GSDeviceVK::ReleaseStereoBackbuffers()
 {
 	for (std::unique_ptr<GSTextureVK>& bb : s_bb_right)

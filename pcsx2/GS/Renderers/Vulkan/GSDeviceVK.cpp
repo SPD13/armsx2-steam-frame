@@ -4860,6 +4860,7 @@ void GSDeviceVK::DoDrawMultiStretchRects(
 		dTex->AddStereoContentFrom(rects[i].src);
 	if (NeedsStereoLayerLoop(dTex))
 	{
+		BeginStereoLayerWrite(dTex);
 		std::vector<MultiStretchRect> layer_rects(rects, rects + num_rects);
 		for (u32 layer = 0; layer < dTex->GetArrayLayers(); layer++)
 		{
@@ -5033,6 +5034,7 @@ void GSDeviceVK::DoStretchRect(GSTextureVK* sTex, const GSVector4& sRect, GSText
 		dTex->AddStereoContentFrom(sTex);
 	if (NeedsStereoLayerLoop(dTex))
 	{
+		BeginStereoLayerWrite(dTex);
 		for (u32 layer = 0; layer < dTex->GetArrayLayers(); layer++)
 		{
 			DoStretchRect(static_cast<GSTextureVK*>(StereoLayerOf(sTex, layer)), sRect,
@@ -5263,6 +5265,7 @@ void GSDeviceVK::DoMerge(GSTexture* sTex[3], GSVector4* sRect, GSTexture* dTex, 
 	dTex->AddStereoContentFrom(sTex[1]);
 	if (NeedsStereoLayerLoop(dTex))
 	{
+		BeginStereoLayerWrite(dTex);
 		for (u32 layer = 0; layer < dTex->GetArrayLayers(); layer++)
 		{
 			GSTexture* layer_src[3] = {
@@ -5400,6 +5403,7 @@ void GSDeviceVK::DoInterlace(GSTexture* sTex, const GSVector4& sRect, GSTexture*
 	dTex->AddStereoContentFrom(sTex);
 	if (NeedsStereoLayerLoop(dTex))
 	{
+		BeginStereoLayerWrite(dTex);
 		for (u32 layer = 0; layer < dTex->GetArrayLayers(); layer++)
 			DoInterlace(StereoLayerOf(sTex, layer), sRect, dTex->GetLayerProxyTexture(layer), dRect, shader, filter, cb);
 		return;
@@ -5426,6 +5430,7 @@ void GSDeviceVK::DoShadeBoost(GSTexture* sTex, GSTexture* dTex, const float para
 {
 	if (NeedsStereoLayerLoop(dTex))
 	{
+		BeginStereoLayerWrite(dTex);
 		for (u32 layer = 0; layer < dTex->GetArrayLayers(); layer++)
 			DoShadeBoost(StereoLayerOf(sTex, layer), dTex->GetLayerProxyTexture(layer), params);
 		return;
@@ -5450,6 +5455,7 @@ void GSDeviceVK::DoFXAA(GSTexture* sTex, GSTexture* dTex)
 {
 	if (NeedsStereoLayerLoop(dTex))
 	{
+		BeginStereoLayerWrite(dTex);
 		for (u32 layer = 0; layer < dTex->GetArrayLayers(); layer++)
 			DoFXAA(StereoLayerOf(sTex, layer), dTex->GetLayerProxyTexture(layer));
 		return;
@@ -9316,6 +9322,7 @@ void GSDeviceVK::SetupDATE(GSTexture* rt, GSTexture* ds, SetDATM datm, const GSV
 {
 	if (NeedsStereoLayerLoop(ds))
 	{
+		BeginStereoLayerWrite(ds);
 		for (u32 layer = 0; layer < ds->GetArrayLayers(); layer++)
 			SetupDATE(StereoLayerOf(rt, layer), ds->GetLayerProxyTexture(layer), datm, bbox);
 		return;
