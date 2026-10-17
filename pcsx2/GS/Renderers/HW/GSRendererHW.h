@@ -446,6 +446,7 @@ private:
 	void VolumetricRecordDraw(GSTextureCache::Target* rt, GSTextureCache::Target* ds);
 	void VolumetricClassifyDraw(GSTextureCache::Target* rt, GSTextureCache::Source* tex);
 	void VolumetricStereoConstants(GSTextureCache::Target* rt);
+	void VolumetricEndVSync();
 
 public:
 	GSRendererHW();

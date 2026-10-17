@@ -15,12 +15,23 @@
 
 // Atomic: a host may switch it while the GS runs (the light gun needs depth in stereo mode).
 static std::atomic<bool> s_volumetric_enabled{false};
-static GSVolumetric::StereoSettings s_stereo;
+static GSVolumetric::StereoSettings s_stereo; // in effect, GS thread only
 static int s_stereo_eye = 0;
+
+// The host's latest settings, taken by ApplyStereo between frames.
+static std::mutex s_stereo_pending_mutex;
+static GSVolumetric::StereoSettings s_stereo_pending;
 
 void GSVolumetric::SetStereo(const StereoSettings& settings)
 {
-	s_stereo = settings;
+	std::lock_guard lock(s_stereo_pending_mutex);
+	s_stereo_pending = settings;
+}
+
+void GSVolumetric::ApplyStereo()
+{
+	std::lock_guard lock(s_stereo_pending_mutex);
+	s_stereo = s_stereo_pending;
 }
 
 const GSVolumetric::StereoSettings& GSVolumetric::GetStereo()

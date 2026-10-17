@@ -1889,6 +1889,10 @@ public:
 	GSTexture* GetColorClipTexture() const { return m_colclip_rt; }
 
 	__fi u32 GetStereoLayers() const { return m_stereo_layers; }
+	// GSVolumetric: switch m_stereo_layers on the running device. The caller has dropped every
+	// texture with the old layer count (texture cache, pool, current frame).
+	virtual bool SupportsStereoLayers(u32 layers) const { return layers == 1; }
+	virtual bool SetStereoLayers(u32 layers) { return layers == m_stereo_layers; }
 		
 	void SetColorClipTexture(GSTexture* tex) { m_colclip_rt = tex; }
 

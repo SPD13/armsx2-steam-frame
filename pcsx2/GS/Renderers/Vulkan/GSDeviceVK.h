@@ -995,6 +995,9 @@ public:
 	void SetUtilityTexture(GSTexture* tex, VkSampler sampler, bool array_view = false);
 	// ARMSX2 VR multiview stereo and libretro frame export, in GSDeviceVKVolumetric.cpp.
 	void EnableStereoMultiview(VkDeviceCreateInfo& device_info, VkPhysicalDeviceMultiviewFeatures& multiview_feature);
+	bool m_multiview_feature = false; // the device was created with multiview on (SetStereoLayers can use 2)
+	bool SupportsStereoLayers(u32 layers) const override;
+	bool SetStereoLayers(u32 layers) override;
 	void BeginStereoLayerWrite(GSTexture* tex);
 	void CheckStereoRenderPass(VkRenderPass rp);
 	void RestartMultiviewPassForNewConstants(bool vertex_constants);

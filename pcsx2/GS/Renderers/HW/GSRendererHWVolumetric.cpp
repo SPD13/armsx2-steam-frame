@@ -8,7 +8,10 @@
 #include "GS/Renderers/HW/GSRendererHW.h"
 #include "GS/GSVolumetric.h"
 
+#include "VMManager.h"
+
 #include "common/Console.h"
+#include "common/Timer.h"
 
 #include "fmt/format.h"
 
@@ -249,8 +252,11 @@ void GSRendererHW::MergeDepth(GSTexture* const* tex, const GSVector4* src_gs_rea
 		std::max(1, static_cast<int>(std::ceil(fs.y / shrink))));
 	const GSVector4 depth_dst = dst[c] * GSVector4(static_cast<float>(canvas_size.x) / static_cast<float>(fs.x),
 		static_cast<float>(canvas_size.y) / static_cast<float>(fs.y)).xyxy();
+	// A canvas also goes when the device's layer count changed (a switch between Flat and Volumetric):
+	// the host reads it as layered exactly when the frame has a right eye.
 	const auto canvas_for = [&](GSTexture*& canvas, GSTexture::Format format, const GSVector2i& size) {
-		if (canvas && (canvas->GetWidth() != size.x || canvas->GetHeight() != size.y))
+		if (canvas && (canvas->GetWidth() != size.x || canvas->GetHeight() != size.y ||
+						  canvas->GetArrayLayers() != g_gs_device->GetStereoLayers()))
 		{
 			g_gs_device->Recycle(canvas);
 			canvas = nullptr;
@@ -473,4 +479,35 @@ void GSRendererHW::VolumetricStereoConstants(GSTextureCache::Target* rt)
 			static_cast<int>(m_context->ALPHA.C), static_cast<int>(m_context->ALPHA.D), static_cast<int>(m_cached_ctx.TEST.ZTE),
 			static_cast<int>(m_cached_ctx.TEST.ZTST), m_cached_ctx.ZBUF.ZMSK ? 1 : 0);
 	}
+}
+
+// Between frames: the host's stereo settings take effect (GSVolumetric::ApplyStereo), and a switch
+// between Volumetric (2 layers) and Flat (1 layer, drawn as upstream draws) rebuilds every target
+// with the new layer count. The texture cache is written back to GS memory and dropped, and the
+// next frame recreates its targets from that memory, as after a change of the upscale multiplier.
+void GSRendererHW::VolumetricEndVSync()
+{
+	GSVolumetric::ApplyStereo();
+	const GSVolumetric::StereoSettings& stereo = GSVolumetric::GetStereo();
+	const u32 layers = (stereo.enabled && stereo.multiview) ? 2 : 1;
+	if (layers == g_gs_device->GetStereoLayers() || !g_gs_device->SupportsStereoLayers(layers))
+		return;
+
+	Common::Timer timer;
+	ReadbackTextureCache();
+	PurgeTextureCache(true, true, true);
+	m_vr.output_rt = {};
+	m_vr.rt_stereo_eye = {};
+	m_vr.rt_stereo_eye_next = 0;
+	g_gs_device->ClearCurrent();
+	g_gs_device->PurgePool();
+	if (!g_gs_device->SetStereoLayers(layers))
+	{
+		Console.Error("3D: the GS could not switch to %u layer(s).", layers);
+		return;
+	}
+	// The pipeline key list and its background builds are per layer count (the shader header differs).
+	g_gs_device->SetGameIdentity(VMManager::GetDiscSerial(), VMManager::GetDiscCRC());
+	Console.WriteLn("3D: the GS now draws %s (%u layer(s)), switched in %.0f ms.",
+		(layers > 1) ? "both eyes" : "flat", layers, timer.GetTimeMilliseconds());
 }

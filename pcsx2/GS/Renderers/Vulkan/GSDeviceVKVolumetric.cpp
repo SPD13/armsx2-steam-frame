@@ -11,6 +11,8 @@
 #include "GS/Renderers/Vulkan/VKBuilders.h"
 #include "GS/Renderers/Vulkan/VKLibretro.h"
 
+#include "libretro_vulkan.h"
+
 #include "common/Console.h"
 
 #include <algorithm>
@@ -87,8 +89,13 @@ GSTextureVK* GSDeviceVK::PresentTarget(GSTextureVK* bb)
 
 void GSDeviceVK::EnableStereoMultiview(VkDeviceCreateInfo& device_info, VkPhysicalDeviceMultiviewFeatures& multiview_feature)
 {
+	// The host's settings as the GS starts.
+	GSVolumetric::ApplyStereo();
 	m_stereo_layers = 1;
-	if (GSVolumetric::GetStereo().enabled && GSVolumetric::GetStereo().multiview)
+	m_multiview_feature = false;
+	// A host that may show 3D asks for multiview even while it starts flat: the feature can only be
+	// turned on here, and SetStereoLayers switches between 1 and 2 layers while the GS runs.
+	if (GSVolumetric::GetStereo().multiview)
 	{
 		VkPhysicalDeviceMultiviewFeatures probe_mv = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_FEATURES};
 		VkPhysicalDeviceFeatures2 probe = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
@@ -98,14 +105,96 @@ void GSDeviceVK::EnableStereoMultiview(VkDeviceCreateInfo& device_info, VkPhysic
 		{
 			multiview_feature.multiview = VK_TRUE;
 			Vulkan::AddPointerToChain(&device_info, &multiview_feature);
-			m_stereo_layers = 2;
-			Console.WriteLn("VK: multiview stereo enabled (2 layers per render target).");
+			m_multiview_feature = true;
+			m_stereo_layers = GSVolumetric::GetStereo().enabled ? 2 : 1;
+			Console.WriteLn("VK: multiview available; starting with %u layer(s) per render target.", m_stereo_layers);
 		}
 		else
 		{
 			Console.Warning("VK: multiview stereo requested, but the device has no multiview support.");
 		}
 	}
+}
+
+bool GSDeviceVK::SupportsStereoLayers(u32 layers) const
+{
+	return layers == 1 || (layers == 2 && m_multiview_feature);
+}
+
+// Flat (1 layer) draws as upstream does: single-view TFX passes and shaders, no layer loops, no
+// multiview pass restarts. Volumetric (2 layers) draws both eyes. What bakes the layer count in is
+// rebuilt here: the TFX render passes (cached per multiview-ness, so switching back reuses them),
+// the TFX shaders and pipelines (recompiled as draws need them, from the shader cache once seen),
+// and the convert pipelines with MULTIVIEW variants (colour clip, DATE prim-ID setup).
+bool GSDeviceVK::SetStereoLayers(u32 layers)
+{
+	if (layers == m_stereo_layers)
+		return true;
+	if (!SupportsStereoLayers(layers))
+		return false;
+
+	// Workers build pipelines for the old layer count; the caller restarts them (SetGameIdentity).
+	StopPipelinePrecompile();
+	EndRenderPass();
+	ExecuteCommandBuffer(false);
+	// vkDeviceWaitIdle needs every queue to itself: the frontend submits to the shared one.
+	auto* const hw_render = static_cast<retro_hw_render_interface_vulkan*>(VKLibretro::GetHWRenderInterface());
+	if (hw_render)
+		hw_render->lock_queue(hw_render->handle);
+	WaitForGPUIdle();
+	if (hw_render)
+		hw_render->unlock_queue(hw_render->handle);
+
+	{
+		std::unique_lock lock(m_tfx_shader_mutex);
+		for (auto& it : m_tfx_pipelines)
+			vkDestroyPipeline(m_device, it.second, nullptr);
+		m_tfx_pipelines.clear();
+		for (auto& it : m_tfx_fragment_shaders)
+			vkDestroyShaderModule(m_device, it.second, nullptr);
+		m_tfx_fragment_shaders.clear();
+		for (auto& it : m_tfx_vertex_shaders)
+			vkDestroyShaderModule(m_device, it.second, nullptr);
+		m_tfx_vertex_shaders.clear();
+	}
+	for (VkPipeline& pipe : m_convert)
+	{
+		if (pipe != VK_NULL_HANDLE)
+			vkDestroyPipeline(m_device, pipe, nullptr);
+		pipe = VK_NULL_HANDLE;
+	}
+	for (auto* arr : {&m_colclip_setup_pipelines, &m_colclip_finish_pipelines})
+	{
+		for (auto& row : *arr)
+		{
+			for (VkPipeline& pipe : row)
+			{
+				if (pipe != VK_NULL_HANDLE)
+					vkDestroyPipeline(m_device, pipe, nullptr);
+				pipe = VK_NULL_HANDLE;
+			}
+		}
+	}
+	for (auto& row : m_primid_image_setup_pipelines)
+	{
+		for (VkPipeline& pipe : row)
+		{
+			if (pipe != VK_NULL_HANDLE)
+				vkDestroyPipeline(m_device, pipe, nullptr);
+			pipe = VK_NULL_HANDLE;
+		}
+	}
+
+	m_stereo_layers = layers;
+	m_current_pipeline = VK_NULL_HANDLE;
+	m_date_copy = {};
+	InvalidateCachedState();
+	if (!CreateRenderPasses() || !CompileConvertPipelines())
+	{
+		Console.Error("VK: rebuilding the render passes and pipelines for %u layer(s) failed.", layers);
+		return false;
+	}
+	return true;
 }
 
 // A single-view utility pass writes a layered texture one layer proxy at a time, and the proxies

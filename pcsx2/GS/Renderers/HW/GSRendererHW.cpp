@@ -185,6 +185,7 @@ void GSRendererHW::VSync(u32 field, bool registers_written, bool idle_frame)
 	m_skip_offset = 0;
 
 	GSRenderer::VSync(field, registers_written, idle_frame);
+	VolumetricEndVSync();
 }
 
 GSTexture* GSRendererHW::GetOutput(int i, float& scale, int& y_offset)

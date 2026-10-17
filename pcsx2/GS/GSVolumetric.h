@@ -77,7 +77,7 @@ namespace GSVolumetric
 	//
 	// With multiview, both eyes are drawn in every frame instead: every render target gets one layer
 	// per eye and every draw is a VK_KHR_multiview draw that applies each eye's shift to its own
-	// layer. Needs the Vulkan renderer, and is fixed when the GS device is created.
+	// layer. Needs the Vulkan renderer, with multiview turned on when the GS device is created.
 	//
 	// Portal (Z mode only, the host's "Volumetric+"): the scene gets a fixed size in the room instead
 	// of a fixed depth range. The game's camera is taken to be where the viewer stood at the nominal
@@ -96,7 +96,15 @@ namespace GSVolumetric
 		bool multiview = false;
 		bool portal = false;
 	};
+	//
+	// Flat (enabled off, multiview on): the device draws one layer, as upstream does, and can switch
+	// to two while it runs (GSDevice::SetStereoLayers, done by the hardware renderer at vsync).
+	//
+	// SetStereo (any thread) takes effect at the next frame boundary, when the GS thread calls
+	// ApplyStereo, so that each frame is drawn with one set of settings and a device layer count
+	// that matches them. GetStereo is the set in effect (GS thread).
 	void SetStereo(const StereoSettings& settings);
+	void ApplyStereo();
 	const StereoSettings& GetStereo();
 	int CurrentEye(); // 0 left, 1 right
 	// Per eye, set by the host every frame: its offset from the screen centre in NDC (x right, y
