@@ -396,7 +396,12 @@ void GSRendererHW::VolumetricClassifyDraw(GSTextureCache::Target* rt, GSTextureC
 	// real Z sits where its Z puts it and is shifted like the rest: Time Crisis II draws the halos
 	// of its wall lamps as additive Q = 1 billboards at the lamp's depth, which pinned to the glass
 	// floated in front of the wall.
-	const bool stereo_source = tex && tex->m_texture && tex->m_texture->HasStereoContent();
+	// A per-eye depth buffer read as a texture is a screen-space effect over the scene too: Time
+	// Crisis 3 turns each pixel's depth into fog alpha with sprites at the far plane, which shifted
+	// put the far scene's fog over the near rocks of the other eye's picture.
+	const bool stereo_depth_source = tex && tex->m_texture && tex->m_texture->GetArrayLayers() > 1 &&
+									 tex->m_from_target && tex->m_from_target->m_type == GSTextureCache::DepthStencil;
+	const bool stereo_source = tex && tex->m_texture && (tex->m_texture->HasStereoContent() || stereo_depth_source);
 	const bool depth_placed = GSVolumetric::GetStereo().z_mode && m_cached_ctx.TEST.ZTE &&
 							  (m_cached_ctx.TEST.ZTST == ZTST_GEQUAL || m_cached_ctx.TEST.ZTST == ZTST_GREATER) &&
 							  m_vt.m_min.p.z > 0.0f;
