@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2002-2026 PCSX2 Dev Team
 // SPDX-License-Identifier: GPL-3.0+
 
-// ARMSX2 VR (GSVolumetric.h): the hardware renderer's depth capture and stereo state, held by
+// Volumetric (GSVolumetric.h, ENABLE_VOLUMETRIC): the hardware renderer's depth capture and stereo state, held by
 // GSRendererHW as m_vr. The code using it is in GSRendererHWVolumetric.cpp.
 
 #pragma once

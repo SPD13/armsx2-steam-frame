@@ -1,9 +1,10 @@
 // SPDX-FileCopyrightText: 2002-2026 PCSX2 Dev Team
 // SPDX-License-Identifier: GPL-3.0+
 
-// ARMSX2 VR (GSVolumetric.h): the Vulkan device's multiview stereo and the depth, pre-HUD and
-// right-eye images handed to the host with each libretro frame. Upstream GSDeviceVK.cpp only calls
-// into these functions, so that merging upstream meets one-line hooks rather than this code.
+// Volumetric (GSVolumetric.h, ENABLE_VOLUMETRIC): the Vulkan device's multiview stereo and the depth,
+// pre-HUD and right-eye images handed to the frontend with each libretro frame. GSDeviceVK.cpp only
+// calls into these functions (one-line hooks), which do nothing in builds without ENABLE_VOLUMETRIC
+// (GSDeviceVK.h).
 
 #include "GS/GSPerfMon.h"
 #include "GS/GSVolumetric.h"
@@ -91,6 +92,7 @@ void GSDeviceVK::EnableStereoMultiview(VkDeviceCreateInfo& device_info, VkPhysic
 {
 	// The host's settings as the GS starts.
 	GSVolumetric::ApplyStereo();
+	m_volumetric_shaders = GSVolumetric::GetStereo().enabled || GSVolumetric::GetStereo().multiview;
 	m_stereo_layers = 1;
 	m_multiview_feature = false;
 	// A host that may show 3D asks for multiview even while it starts flat: the feature can only be

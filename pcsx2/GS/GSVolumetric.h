@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2002-2026 PCSX2 Dev Team
 // SPDX-License-Identifier: GPL-3.0+
 
-// ARMSX2 VR: depth that lines up with the presented image, for hosts that show the game in
-// 3D (the Steam Frame VR host reads it through VKLibretro::Frame).
+// Volumetric: depth that lines up with the presented image, and multiview stereo, for frontends that
+// show the game in 3D (the Steam Frame VR frontend reads it through VKLibretro::Frame). Built with
+// ENABLE_VOLUMETRIC (PCSX2_VOLUMETRIC); without it, the GS's hooks below are empty inline functions.
 //
 // The GS has no notion of "the depth of the displayed frame": the display circuits read colour
 // targets, and a depth buffer is only tied to a colour target while they are drawn together. So
@@ -47,6 +48,8 @@ struct GSVolumetricFrame
 	// ... and where that part lands in the presented canvas, in pixels.
 	GSVector4 draw_rect = GSVector4::zero();
 };
+
+#ifdef PCSX2_VOLUMETRIC
 
 namespace GSVolumetric
 {
@@ -160,4 +163,20 @@ namespace GSVolumetric
 	// draws both eyes per frame.
 	void BeginVSync();
 	void EndMerge(int displayed_eye, bool idle_frame, bool multiview);
+	// GSRenderer::VSync: the part of the merged frame that is presented, as UVs, and where it lands
+	// in the presented canvas, in pixels (GSVolumetricFrame::src_uv, draw_rect).
+	void SetPresentedRect(const GSVector4& src_uv, const GSVector4& draw_rect);
 } // namespace GSVolumetric
+
+#else
+
+// Built without ENABLE_VOLUMETRIC: the hooks the GS calls do nothing.
+namespace GSVolumetric
+{
+	inline bool IsEnabled() { return false; }
+	inline void BeginVSync() {}
+	inline void EndMerge(int displayed_eye, bool idle_frame, bool multiview) {}
+	inline void SetPresentedRect(const GSVector4& src_uv, const GSVector4& draw_rect) {}
+} // namespace GSVolumetric
+
+#endif

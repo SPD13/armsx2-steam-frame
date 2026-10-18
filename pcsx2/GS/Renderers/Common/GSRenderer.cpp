@@ -1226,8 +1226,7 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
 				src_rect, current->GetSize(), s_display_alignment, g_gs_device->UsesLowerLeftOrigin(),
 				GetVideoMode() == GSVideoMode::SDTV_480P);
 			s_last_draw_rect = draw_rect;
-			GSVolumetric::CurrentFrame().src_uv = src_uv;
-			GSVolumetric::CurrentFrame().draw_rect = draw_rect;
+			GSVolumetric::SetPresentedRect(src_uv, draw_rect);
 
 			// MetalFX spatial upscale runs before CAS/present, and only when actually upscaling
 			// (source smaller than the on-screen draw rect). CAS can still sharpen afterward.

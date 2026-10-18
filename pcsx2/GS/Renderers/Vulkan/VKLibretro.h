@@ -69,7 +69,7 @@ namespace VKLibretro
 		u32 width = 0;
 		u32 height = 0;
 
-		// ARMSX2 VR (GSVolumetric.h): depth of the displayed picture, when there is one. An
+		// Volumetric (GSVolumetric.h, ENABLE_VOLUMETRIC): depth of the displayed picture, when there is one. An
 		// R32F image in SHADER_READ_ONLY_OPTIMAL holding GS Z / 2^32 (larger is nearer); times
 		// depth_scale it is 0..1 of the Z format's range. depth_src_uv is the region of it that
 		// was presented, at depth_draw_rect (x0, y0, x1, y1 pixels) in the image above.
@@ -97,7 +97,7 @@ namespace VKLibretro
 		// Where the game's picture lies in the image (x0, y0, x1, y1 pixels), with or without depth:
 		// the rest is border. Light guns aim in this space.
 		float draw_rect[4] = {};
-		// ARMSX2 VR present copy: the ids of the armed targets this frame was copied into (image to
+		// Volumetric present copy: the ids of the armed targets this frame was copied into (image to
 		// the left target, right_image to the right one), 0 for none.
 		u64 copied_left = 0;
 		u64 copied_right = 0;
@@ -105,7 +105,8 @@ namespace VKLibretro
 	void PublishFrame(const Frame& frame);
 	bool ConsumeFrame(Frame* out_frame); // true if a new frame arrived since the last consume
 
-	// ARMSX2 VR present copy. The frontend hands over images it wants the next presented frame copied
+#ifdef PCSX2_VOLUMETRIC
+	// Volumetric present copy (ENABLE_VOLUMETRIC). The frontend hands over images it wants the next presented frame copied
 	// into (XR swapchain images it acquired), one per eye. The GS records the copies at the end of the
 	// present's command buffer, so they run right after the frame on the GPU instead of queueing
 	// behind the GS's later work, which on a shared queue made the frontend's frames late.
@@ -130,6 +131,7 @@ namespace VKLibretro
 	// FinishPresentCopy once the command buffer with the copies is submitted.
 	bool TakePresentCopy(PresentCopyTarget* left, PresentCopyTarget* right);
 	void FinishPresentCopy();
+#endif
 
 	// Frame pacing: when enabled, PublishFrame blocks the GS thread until
 	// retro_run consumes the frame — the frontend's retro_run cadence becomes

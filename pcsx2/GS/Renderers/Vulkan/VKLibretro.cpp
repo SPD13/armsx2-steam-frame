@@ -178,6 +178,7 @@ namespace VKLibretro
 		return true;
 	}
 
+#ifdef PCSX2_VOLUMETRIC
 	static std::mutex s_copy_mutex;
 	static std::condition_variable s_copy_done_cv;
 	static PresentCopyTarget s_copy_armed[2];
@@ -215,6 +216,7 @@ namespace VKLibretro
 		s_copy_in_flight = false;
 		s_copy_done_cv.notify_all();
 	}
+#endif
 
 	void SetPacing(bool enabled)
 	{
@@ -239,9 +241,11 @@ namespace VKLibretro
 		s_frame_consumed = 0;
 		s_pacing = false;
 		s_frame_consumed_cv.notify_all();
+#ifdef PCSX2_VOLUMETRIC
 		std::lock_guard<std::mutex> copy_lock(s_copy_mutex);
 		s_copy_armed[0] = s_copy_armed[1] = PresentCopyTarget();
 		s_copy_in_flight = false;
 		s_copy_done_cv.notify_all();
+#endif
 	}
 } // namespace VKLibretro

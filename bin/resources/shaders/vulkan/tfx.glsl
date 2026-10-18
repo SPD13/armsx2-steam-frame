@@ -16,6 +16,11 @@
 #define VS_EXPAND_TRIANGLE_AA1 5
 #endif
 
+// Volumetric stereo (GSVolumetric.h): set for devices created for a frontend that may show stereo.
+#ifndef VOLUMETRIC
+#define VOLUMETRIC 0
+#endif
+
 layout(std140, set = 0, binding = 0) uniform cb0
 {
 	vec2 VertexScale;
@@ -25,10 +30,13 @@ layout(std140, set = 0, binding = 0) uniform cb0
 	vec2 PointSize;
 	uint MaxDepth;
 	float LineAA1Width;
+#if VOLUMETRIC
 	vec4 VRStereo; // GSVolumetric stereo: xy the (left) eye's shift for the farthest geometry (0 = off), z convergence, w Z mode (1), or portal (minus the left eye's distance ratio)
 	vec4 VRStereo2; // x: integer-scaled depth to 0..1 of the Z format, yz: the right eye's shift (multiview), w: portal, the right eye's distance ratio
+#endif
 };
 
+#if VOLUMETRIC
 // GSVolumetric stereo: where a vertex lands on screen for the eye's position, in NDC - the parallax
 // of a window: geometry at the convergence stays on the screen, the farthest moves most. With
 // multiview, view 0 is the left eye and view 1 the right. The portal also scales the picture about
@@ -61,6 +69,7 @@ vec2 VRStereoPlace(vec2 p, float q, float z_ndc)
 		f = max(0.0f, 1.0f - VRStereo.z * q);
 	return p + eye * f;
 }
+#endif
 
 layout(location = 0) out VSOutput
 {
@@ -101,7 +110,9 @@ void main()
 	gl_Position.xy = gl_Position.xy * vec2(VertexScale.x, -VertexScale.y) - vec2(VertexOffset.x, -VertexOffset.y);
 	gl_Position.z *= exp2(-32.0f);		// integer->float depth
 	gl_Position.y = -gl_Position.y;
+#if VOLUMETRIC
 	gl_Position.xy = VRStereoPlace(gl_Position.xy, a_q, gl_Position.z);
+#endif
 
 #if GPU_PROFILE_MALI
 	// Mali HW bug (PPSSPP EQUAL_WZ_CORRUPTS_DEPTH): clip-space z == w corrupts the
@@ -211,7 +222,9 @@ ProcessedVertex load_vertex(uint index)
 	vtx.p.xy = vtx.p.xy * vec2(VertexScale.x, -VertexScale.y) - vec2(VertexOffset.x, -VertexOffset.y);
 	vtx.p.z *= exp2(-32.0f);		// integer->float depth
 	vtx.p.y = -vtx.p.y;
+#if VOLUMETRIC
 	vtx.p.xy = VRStereoPlace(vtx.p.xy, a_q, vtx.p.z);
+#endif
 
 	#if VS_TME
 		vec2 uv = a_uv - TextureOffset;

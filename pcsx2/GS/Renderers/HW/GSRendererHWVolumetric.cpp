@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2002-2026 PCSX2 Dev Team
 // SPDX-License-Identifier: GPL-3.0+
 
-// ARMSX2 VR (GSVolumetric.h): the hardware renderer's depth capture and geometric stereo. Upstream
-// GSRendererHW.cpp only calls into these functions, so that merging upstream meets one-line hooks
-// rather than this code.
+// Volumetric (GSVolumetric.h, ENABLE_VOLUMETRIC): the hardware renderer's depth capture and stereo.
+// GSRendererHW.cpp only calls into these functions (one-line hooks), which are empty in builds
+// without ENABLE_VOLUMETRIC (GSRendererHW.h).
 
 #include "GS/Renderers/HW/GSRendererHW.h"
 #include "GS/GSVolumetric.h"
@@ -567,6 +567,11 @@ void GSRendererHW::VolumetricStereoConstants(GSTextureCache::Target* rt)
 // between Volumetric (2 layers) and Flat (1 layer, drawn as upstream draws) rebuilds every target
 // with the new layer count. The texture cache is written back to GS memory and dropped, and the
 // next frame recreates its targets from that memory, as after a change of the upscale multiplier.
+void GSRendererHW::VolumetricSetOutput(int index, GSTextureCache::Target* rt)
+{
+	m_vr.output_rt[index] = rt;
+}
+
 void GSRendererHW::VolumetricEndVSync()
 {
 	// Overlays not drawn for a few vsyncs are gone (VolumetricClassifyDraw).

@@ -3457,7 +3457,7 @@ GSDevice::PresentResult GSDeviceVK::DoBeginPresent(bool frame_skip)
 				VkCommandBuffer cmdbuffer = GetCurrentCommandBuffer();
 				if (!frame_skip && m_current)
 					static_cast<GSTextureVK*>(m_current)->TransitionToLayout(GSTextureVK::Layout::ShaderReadOnly);
-				// ARMSX2 VR: straight into the frontend's image when it armed one of this size.
+				// Volumetric: straight into the frontend's image when it armed one of this size.
 				GSTextureVK* const target = TakePresentTargets(bb.get());
 				target->TransitionToLayout(cmdbuffer, GSTextureVK::Layout::ColorAttachment);
 
@@ -7677,6 +7677,7 @@ VkShaderModule GSDeviceVK::GetTFXVertexShader(GSHWDrawConfig::VSSelector sel)
 	AddMacro(ss, "VS_EXPAND", static_cast<int>(sel.expand));
 	AddMacro(ss, "VS_SPRITE_EDGE_CLAMP", sel.sprite_edge_clamp);
 	AddMacro(ss, "MULTIVIEW", IsMultiview());
+	AddMacro(ss, "VOLUMETRIC", m_volumetric_shaders);
 	ss << m_tfx_source;
 	std::string source = ss.str();
 	source_timer.reset();
@@ -8857,8 +8858,9 @@ void GSDeviceVK::PSSetShaderResource(int i, GSTexture* sr, bool check_state, Res
 		vkTex = m_null_texture.get();
 	}
 
-	if (m_tfx_textures[i] == vkTex && !update_layout && m_tfx_written_views[i] == GetTFXView(vkTex) &&
-		m_tfx_written_layouts[i] == vkTex->GetVkLayout())
+	// Multiview: the descriptor must also still match the texture's view and layout (see ApplyTFXState).
+	if (m_tfx_textures[i] == vkTex && !update_layout &&
+		(!IsMultiview() || (m_tfx_written_views[i] == GetTFXView(vkTex) && m_tfx_written_layouts[i] == vkTex->GetVkLayout())))
 	{
 		return;
 	}
@@ -9169,14 +9171,17 @@ bool GSDeviceVK::ApplyTFXState(bool already_execed)
 	if (m_features.vs_expand && (flags & DIRTY_FLAG_VS_PUSH_CONSTANTS))
 		SetVSPushConstants(m_vs_pc_cache.base_vertex, m_vs_pc_cache.base_index, true);
 
-	// A bound texture whose view or layout no longer matches its descriptor (it moved layout while
-	// bound) gets its descriptor written again.
-	for (u32 i = 0; i < TFX_TEXTURE_RT_ROV; i++)
+	// Multiview: a bound texture whose view or layout no longer matches its descriptor (a layer proxy
+	// moved its parent's layout while it stayed bound) gets its descriptor written again.
+	if (IsMultiview())
 	{
-		if (m_tfx_written_views[i] != GetTFXView(m_tfx_textures[i]) ||
-			m_tfx_written_layouts[i] != m_tfx_textures[i]->GetVkLayout())
+		for (u32 i = 0; i < TFX_TEXTURE_RT_ROV; i++)
 		{
-			flags |= (DIRTY_FLAG_TFX_TEXTURE_0 << i);
+			if (m_tfx_written_views[i] != GetTFXView(m_tfx_textures[i]) ||
+				m_tfx_written_layouts[i] != m_tfx_textures[i]->GetVkLayout())
+			{
+				flags |= (DIRTY_FLAG_TFX_TEXTURE_0 << i);
+			}
 		}
 	}
 

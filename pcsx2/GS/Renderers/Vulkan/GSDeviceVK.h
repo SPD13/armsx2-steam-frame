@@ -1000,7 +1000,13 @@ public:
 	// array_view: bind it as an array (all layers), for the MULTIVIEW utility passes drawn inside
 	// multiview TFX render passes; otherwise a layered texture is bound as its layer 0.
 	void SetUtilityTexture(GSTexture* tex, VkSampler sampler, bool array_view = false);
-	// ARMSX2 VR multiview stereo and libretro frame export, in GSDeviceVKVolumetric.cpp.
+	// Volumetric multiview stereo and libretro frame export (GSVolumetric.h), in
+	// GSDeviceVKVolumetric.cpp. Built with ENABLE_VOLUMETRIC; without it the hooks called from this
+	// device do nothing, and the device never has more than one layer.
+	// Set when the device is created for a frontend that may show stereo: the TFX vertex shaders then
+	// carry the stereo shift (VOLUMETRIC), which is 0 while it shows the picture flat.
+	bool m_volumetric_shaders = false;
+#ifdef PCSX2_VOLUMETRIC
 	void EnableStereoMultiview(VkDeviceCreateInfo& device_info, VkPhysicalDeviceMultiviewFeatures& multiview_feature);
 	bool m_multiview_feature = false; // the device was created with multiview on (SetStereoLayers can use 2)
 	bool SupportsStereoLayers(u32 layers) const override;
@@ -1021,6 +1027,20 @@ public:
 	void DebugReadFlushRange();
 	void DebugFlushAfterDraw();
 	u32 m_debug_draw_index = 0;
+#else
+	void EnableStereoMultiview(VkDeviceCreateInfo& device_info, VkPhysicalDeviceMultiviewFeatures& multiview_feature) {}
+	void BeginStereoLayerWrite(GSTexture* tex) {}
+	void CheckStereoRenderPass(VkRenderPass rp) {}
+	void RestartMultiviewPassForNewConstants(bool vertex_constants) {}
+	GSTextureVK* TakePresentTargets(GSTextureVK* bb) { return bb; }
+	GSTextureVK* PresentTarget(GSTextureVK* bb) { return bb; }
+	void FinishPresentCopies() {}
+	GSTextureVK* PrepareVolumetricPresent(VkCommandBuffer cmdbuffer, GSTextureVK* bb, int bb_index) { return nullptr; }
+	void FillVolumetricFrame(VKLibretro::Frame& frame, GSTextureVK* bb, GSTextureVK* bb_right) {}
+	void ReleaseStereoBackbuffers() {}
+	void DebugReadFlushRange() {}
+	void DebugFlushAfterDraw() {}
+#endif
 
 	// GSVolumetric multiview stereo: TFX shaders declare array samplers.
 	__fi VkImageView GetTFXView(GSTextureVK* tex) { return IsMultiview() ? tex->GetArrayView() : tex->GetView(); }

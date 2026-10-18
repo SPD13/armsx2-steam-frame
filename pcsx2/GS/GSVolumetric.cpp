@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2002-2026 PCSX2 Dev Team
 // SPDX-License-Identifier: GPL-3.0+
 
-// ARMSX2 VR: the GSVolumetric state shared by the host, the renderer and the device (GSVolumetric.h).
-// Kept out of the upstream GS files so that upstream merges only meet the calls into it.
+// Volumetric (ENABLE_VOLUMETRIC): the GSVolumetric state shared by the frontend, the renderer and the
+// device (GSVolumetric.h). The GS's own files only call into it.
 
 #include "GS/GSVolumetric.h"
 
@@ -231,4 +231,10 @@ void GSVolumetric::EndMerge(int displayed_eye, bool idle_frame, bool multiview)
 	{
 		s_volumetric_frame.stereo_eye = -1;
 	}
+}
+
+void GSVolumetric::SetPresentedRect(const GSVector4& src_uv, const GSVector4& draw_rect)
+{
+	s_volumetric_frame.src_uv = src_uv;
+	s_volumetric_frame.draw_rect = draw_rect;
 }
