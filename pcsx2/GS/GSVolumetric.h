@@ -17,6 +17,7 @@
 
 #include "GS/GSVector.h"
 
+#include <span>
 #include <string>
 
 class GSTexture;
@@ -73,7 +74,8 @@ namespace GSVolumetric
 	//   Q mode: f = max(0, 1 - convergence * Q)          (Q = 1/w of perspective vertices)
 	//   Z mode: f = clamp(1 - Znorm / convergence, 0, 1) (Znorm = Z / format maximum)
 	// f is 0 for depth at the convergence (on the screen) and 1 for the farthest geometry.
-	// Screen-space (FST) draws and HUDs stamped at the maximum depth are not shifted.
+	// Screen-space (FST) draws and HUDs stamped at the maximum depth are not shifted (except the
+	// overlays on a shot, see SetShotAnchors).
 	//
 	// With multiview, both eyes are drawn in every frame instead: every render target gets one layer
 	// per eye and every draw is a VK_KHR_multiview draw that applies each eye's shift to its own
@@ -95,6 +97,9 @@ namespace GSVolumetric
 		float convergence = 1.0f;
 		bool multiview = false;
 		bool portal = false;
+		// Additive 2D overlays that come and go are effects in the scene (the game's profile turns this
+		// on, see SetSceneDepth).
+		bool fx_overlays = false;
 	};
 	//
 	// Flat (enabled off, multiview on): the device draws one layer, as upstream does, and can switch
@@ -114,6 +119,32 @@ namespace GSVolumetric
 	// The eye's on-screen shift for the farthest geometry (offset times depth factor), in x and y, and
 	// its distance ratio in z.
 	GSVector4 EyeShift(int eye);
+
+	// Where the light guns' shots landed lately, for the effects a game stamps over its picture there.
+	// Crisis Zone draws its hit bursts as 2D sprites with its HUD's depth and no depth test, so they
+	// carry no depth of their own and would sit on the glass. A 2D overlay (an FST or Q = 1 draw into
+	// the displayed picture) centred on a shot is drawn at the scene's depth there instead. u, v: 0..1
+	// of the game's picture; znorm: the scene's Z / the format's maximum at that point.
+	struct ShotAnchor
+	{
+		float u = 0.0f, v = 0.0f, znorm = 0.0f;
+	};
+	static constexpr size_t MAX_SHOT_ANCHORS = 16;
+	// Any thread; takes effect with the stereo settings, at ApplyStereo. GetShotAnchors: GS thread.
+	void SetShotAnchors(const ShotAnchor* anchors, size_t count);
+	std::span<const ShotAnchor> GetShotAnchors();
+
+	// The scene's depth over the game's picture, from a recent frame (the host reads it back from the
+	// depth canvas), for the effects a game draws as 2D overlays wherever they happen: Crisis Zone's
+	// bursts on a dying enemy come a second after the shot, away from it. With fx_overlays, an additive
+	// 2D overlay that is not a HUD piece is drawn at the nearest depth under its middle.
+	// SCENE_DEPTH_WIDTH x SCENE_DEPTH_HEIGHT Znorm values, row by row over the picture (0..1 u, v);
+	// negative where unknown. Null: none. Any thread; takes effect at ApplyStereo.
+	static constexpr u32 SCENE_DEPTH_WIDTH = 80, SCENE_DEPTH_HEIGHT = 60;
+	void SetSceneDepth(const float* znorm);
+	// The nearest (largest) Znorm in the picture's rectangle u0..u1, v0..v1, leaving out HUDs stamped at
+	// the maximum; negative if there is none. GS thread.
+	float SceneDepth(float u0, float v0, float u1, float v1);
 
 	// Debugging: at the next present, write <prefix>-left.png / -right.png (the images handed to the
 	// host) and <prefix>-layer0.png / -layer1.png (the frame's two layers). Any thread.

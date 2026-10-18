@@ -11,6 +11,7 @@
 #include <array>
 #include <map>
 #include <tuple>
+#include <unordered_map>
 #include <utility>
 
 class GSTexture;
@@ -42,6 +43,14 @@ struct GSRendererHWVolumetricState
 	bool stereo_screen_space = false;
 	bool stereo_source = false; // ... because it textures from a stereo picture
 	bool stereo_display_target = false; // this draw's target is (or was recently) displayed
+	// A 2D overlay placed in the scene: the depth it goes to (else < 0), on a shot or (overlay_fx) as
+	// an effect at the scene's depth under it.
+	float overlay_znorm = -1.0f;
+	bool overlay_fx = false;
+	// The 2D overlays drawn into displayed pictures, by top left corner: the first and
+	// last vsync each was drawn in, without a gap. One drawn for a while is a HUD piece, not a shot's.
+	std::unordered_map<u64, std::pair<u32, u32>> overlay_seen;
+	u32 overlay_vsync = 0;
 	std::array<u32, 4> stereo_display_bp = {~0u, ~0u, ~0u, ~0u}; // recent display framebuffer bases
 
 	// A few pairings cover the scene, its post-processing buffers and double-buffered frames.

@@ -8,6 +8,8 @@
 
 #include "common/Console.h"
 
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <mutex>
 #include <string>
@@ -18,9 +20,19 @@ static std::atomic<bool> s_volumetric_enabled{false};
 static GSVolumetric::StereoSettings s_stereo; // in effect, GS thread only
 static int s_stereo_eye = 0;
 
+static std::array<GSVolumetric::ShotAnchor, GSVolumetric::MAX_SHOT_ANCHORS> s_shot_anchors; // GS thread
+static size_t s_shot_anchor_count = 0;
+using SceneDepthGrid = std::array<float, GSVolumetric::SCENE_DEPTH_WIDTH * GSVolumetric::SCENE_DEPTH_HEIGHT>;
+static SceneDepthGrid s_scene_depth; // GS thread
+static bool s_scene_depth_valid = false;
+
 // The host's latest settings, taken by ApplyStereo between frames.
 static std::mutex s_stereo_pending_mutex;
 static GSVolumetric::StereoSettings s_stereo_pending;
+static std::array<GSVolumetric::ShotAnchor, GSVolumetric::MAX_SHOT_ANCHORS> s_shot_anchors_pending;
+static size_t s_shot_anchor_count_pending = 0;
+static SceneDepthGrid s_scene_depth_pending;
+static bool s_scene_depth_valid_pending = false;
 
 void GSVolumetric::SetStereo(const StereoSettings& settings)
 {
@@ -32,6 +44,51 @@ void GSVolumetric::ApplyStereo()
 {
 	std::lock_guard lock(s_stereo_pending_mutex);
 	s_stereo = s_stereo_pending;
+	s_shot_anchors = s_shot_anchors_pending;
+	s_shot_anchor_count = s_shot_anchor_count_pending;
+	s_scene_depth_valid = s_scene_depth_valid_pending;
+	if (s_scene_depth_valid)
+		s_scene_depth = s_scene_depth_pending;
+}
+
+void GSVolumetric::SetShotAnchors(const ShotAnchor* anchors, size_t count)
+{
+	std::lock_guard lock(s_stereo_pending_mutex);
+	s_shot_anchor_count_pending = std::min(count, MAX_SHOT_ANCHORS);
+	std::copy_n(anchors, s_shot_anchor_count_pending, s_shot_anchors_pending.begin());
+}
+
+std::span<const GSVolumetric::ShotAnchor> GSVolumetric::GetShotAnchors()
+{
+	return {s_shot_anchors.data(), s_shot_anchor_count};
+}
+
+void GSVolumetric::SetSceneDepth(const float* znorm)
+{
+	std::lock_guard lock(s_stereo_pending_mutex);
+	s_scene_depth_valid_pending = znorm != nullptr;
+	if (znorm)
+		std::copy_n(znorm, s_scene_depth_pending.size(), s_scene_depth_pending.begin());
+}
+
+float GSVolumetric::SceneDepth(float u0, float v0, float u1, float v1)
+{
+	if (!s_scene_depth_valid)
+		return -1.0f;
+	const auto cell = [](float t, u32 n) { return std::clamp(static_cast<int>(t * static_cast<float>(n)), 0, static_cast<int>(n) - 1); };
+	const int x0 = cell(u0, SCENE_DEPTH_WIDTH), x1 = cell(u1, SCENE_DEPTH_WIDTH);
+	const int y0 = cell(v0, SCENE_DEPTH_HEIGHT), y1 = cell(v1, SCENE_DEPTH_HEIGHT);
+	float nearest = -1.0f;
+	for (int y = y0; y <= y1; y++)
+	{
+		for (int x = x0; x <= x1; x++)
+		{
+			const float z = s_scene_depth[y * SCENE_DEPTH_WIDTH + x];
+			if (z < 0.999f) // a HUD stamped at the maximum is not the scene
+				nearest = std::max(nearest, z);
+		}
+	}
+	return nearest > 0.0f ? nearest : -1.0f; // 0: nothing with depth there
 }
 
 const GSVolumetric::StereoSettings& GSVolumetric::GetStereo()

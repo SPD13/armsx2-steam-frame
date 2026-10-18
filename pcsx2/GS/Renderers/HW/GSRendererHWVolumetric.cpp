@@ -434,6 +434,70 @@ void GSRendererHW::VolumetricClassifyDraw(GSTextureCache::Target* rt, GSTextureC
 	}
 	m_vr.stereo_display_target = rt && std::find(m_vr.stereo_display_bp.begin(), m_vr.stereo_display_bp.end(),
 										 static_cast<u32>(rt->m_TEX0.TBP0)) != m_vr.stereo_display_bp.end();
+
+	// A 2D overlay centred on where a shot landed is an effect of that shot (Crisis Zone's hit
+	// bursts: FST sprites at its HUD's Z, drawn without a depth test among the HUD's pieces): it goes
+	// to the scene's depth there. HUD pieces are told apart by place and size: away from the shot,
+	// or spanning most of the picture (Crisis Zone's HUD frame covers all of it). Textured by TME, not
+	// m_process_texture: the renderer skips the texture of some of the additive bursts.
+	// A HUD piece is drawn in the same place every frame (Crisis Zone's ammo bar, next to where the
+	// player shoots), or at the Z format's maximum like the HUDs VolumetricStereoConstants pins.
+	// With the game's fx_overlays, an additive overlay that is not a HUD piece goes to the nearest
+	// scene depth under its middle wherever it is (Crisis Zone's bursts on a dying enemy).
+	m_vr.overlay_znorm = -1.0f;
+	m_vr.overlay_fx = false;
+	const GSVolumetric::StereoSettings& stereo = GSVolumetric::GetStereo();
+	if (!m_vr.stereo_display_target || !stereo.enabled || !stereo.z_mode || !PRIM->TME || stereo_source ||
+		!(PRIM->FST || m_vr.stereo_screen_space))
+		return;
+	// By corner alone: Crisis Zone uploads its HUD's textures to a different address every frame.
+	const u64 key = static_cast<u64>(static_cast<u32>(static_cast<int>(m_vt.m_min.p.x) >> 1)) << 32 |
+					static_cast<u32>(static_cast<int>(m_vt.m_min.p.y) >> 1);
+	auto [seen, added] = m_vr.overlay_seen.try_emplace(key, m_vr.overlay_vsync, m_vr.overlay_vsync);
+	if (!added && m_vr.overlay_vsync - seen->second.second > 3) // a gap: shown again
+		seen->second.first = m_vr.overlay_vsync;
+	seen->second.second = m_vr.overlay_vsync;
+	constexpr u32 HUD_VSYNCS = 60; // about a second
+	const bool steady = m_vr.overlay_vsync - seen->second.first >= HUD_VSYNCS;
+	const u64 z_format_max = (1ull << GSLocalMemory::m_psm[m_cached_ctx.ZBUF.PSM].trbpp) - 1;
+	const bool at_max_depth = m_vt.m_eq.z && m_vt.m_min.p.z >= static_cast<float>(z_format_max);
+	// Placed by scaling its Z, which needs some.
+	if (steady || at_max_depth || m_vt.m_max.p.z < 1.0f)
+		return;
+	const int display = PCRTCDisplays.PCRTCDisplays[0].enabled ? 0 : 1;
+	const GSVector4i fb = PCRTCDisplays.GetFramebufferRect(display);
+	const float fw = static_cast<float>(fb.width()), fh = static_cast<float>(fb.height());
+	const float w = m_vt.m_max.p.x - m_vt.m_min.p.x, h = m_vt.m_max.p.y - m_vt.m_min.p.y;
+	if (fw <= 0.0f || fh <= 0.0f || w >= 0.6f * fw || h >= 0.75f * fh)
+		return;
+
+	const float cx = 0.5f * (m_vt.m_min.p.x + m_vt.m_max.p.x), cy = 0.5f * (m_vt.m_min.p.y + m_vt.m_max.p.y);
+	const float reach = 0.25f * std::max(w, h) + 0.03f * fw;
+	float nearest = reach * reach * 2.0f;
+	for (const GSVolumetric::ShotAnchor& a : GSVolumetric::GetShotAnchors())
+	{
+		const float dx = cx - (static_cast<float>(fb.x) + a.u * fw), dy = cy - (static_cast<float>(fb.y) + a.v * fh);
+		if (std::abs(dx) <= reach && std::abs(dy) <= reach && dx * dx + dy * dy < nearest)
+		{
+			nearest = dx * dx + dy * dy;
+			m_vr.overlay_znorm = a.znorm;
+		}
+	}
+
+	// Additive: Cs * (As or FIX) + Cd. A HUD is blended over the picture instead.
+	const bool additive = PRIM->ABE && m_context->ALPHA.A == 0 && m_context->ALPHA.B == 2 && m_context->ALPHA.D == 1;
+	if (m_vr.overlay_znorm < 0.0f && stereo.fx_overlays && additive)
+	{
+		// A small window at its middle, the same for each layer of an effect (a burst is a few sprites
+		// of different sizes around one point); its glow spreads past what it is on.
+		const float u = (cx - static_cast<float>(fb.x)) / fw, v = (cy - static_cast<float>(fb.y)) / fh;
+		const float znorm = GSVolumetric::SceneDepth(u - 0.03f, v - 0.04f, u + 0.03f, v + 0.04f);
+		if (znorm >= 0.0f)
+		{
+			m_vr.overlay_znorm = znorm;
+			m_vr.overlay_fx = true;
+		}
+	}
 }
 
 void GSRendererHW::VolumetricStereoConstants(GSTextureCache::Target* rt)
@@ -452,7 +516,11 @@ void GSRendererHW::VolumetricStereoConstants(GSTextureCache::Target* rt)
 		if (marks)
 			rt->m_texture->SetStereoContent(true);
 	}
-	if (stereo.enabled && !hud_at_max_depth && !m_vr.stereo_screen_space && m_vr.stereo_display_target)
+	// FST draws are 2D (HUDs, menus, overlays): only an overlay placed in the scene is shifted (see
+	// VolumetricClassifyDraw), its Z scaled so that it reads as the depth it goes to.
+	const bool placed_overlay = m_vr.overlay_znorm >= 0.0f;
+	if (stereo.enabled && m_vr.stereo_display_target &&
+		(placed_overlay || (!hud_at_max_depth && !m_vr.stereo_screen_space && !PRIM->FST)))
 	{
 		// Multiview draws both eyes at once: x/y of vr_stereo for the left (view 0), y/z of
 		// vr_stereo2 for the right. Otherwise vr_stereo carries this frame's eye.
@@ -463,7 +531,9 @@ void GSRendererHW::VolumetricStereoConstants(GSTextureCache::Target* rt)
 		const bool portal = stereo.portal && stereo.z_mode;
 		const float mode = portal ? -std::max(shift.z, 0.01f) : stereo.z_mode ? 1.0f : 0.0f;
 		m_conf.cb_vs.vr_stereo = GSVector4(shift.x, shift.y, stereo.convergence, mode);
-		m_conf.cb_vs.vr_stereo2 = GSVector4(4294967296.0f / static_cast<float>(z_format_max), shift_right.x,
+		const float z_scale = placed_overlay ? m_vr.overlay_znorm * 4294967296.0f / m_vt.m_max.p.z :
+											 4294967296.0f / static_cast<float>(z_format_max);
+		m_conf.cb_vs.vr_stereo2 = GSVector4(z_scale, shift_right.x,
 			shift_right.y, portal ? std::max(shift_right.z, 0.01f) : 0.0f);
 	}
 	else
@@ -474,15 +544,22 @@ void GSRendererHW::VolumetricStereoConstants(GSTextureCache::Target* rt)
 	if (stereo.enabled && GSVolumetric::DrawTraceActive())
 	{
 		const char* why = !m_vr.stereo_display_target ? "offscreen" :
+						  placed_overlay           ? (m_vr.overlay_fx ? "fx-overlay" : "shot-overlay") :
 						  hud_at_max_depth         ? "pin:hud" :
 						  m_vr.stereo_source          ? "pin:stereo-source" :
 						  m_vr.stereo_screen_space    ? (m_process_texture ? "pin:q1" : "pin:fill") :
+						  PRIM->FST                   ? "pin:fst" : // 2D, not placed in the scene
 													 "shifted";
-		Console.WriteLn("Draw stereo: %s z %.0f..%.0f q %.3f..%.3f eqz %d eqq %d fst %d abe %d abcd %d%d%d%d zte %d ztst %d zmsk %d",
+		if (placed_overlay)
+			Console.WriteLn("Draw stereo: overlay placed at Znorm %.4f", m_vr.overlay_znorm);
+		Console.WriteLn("Draw stereo: %s z %.0f..%.0f q %.3f..%.3f eqz %d eqq %d fst %d abe %d abcd %d%d%d%d zte %d ztst %d zmsk %d "
+						"prim %d tme %d verts %u rect %.0f,%.0f..%.0f,%.0f rt %04x tex %04x",
 			why, m_vt.m_min.p.z, m_vt.m_max.p.z, m_vt.m_min.t.z, m_vt.m_max.t.z, m_vt.m_eq.z ? 1 : 0, m_vt.m_eq.q ? 1 : 0,
 			PRIM->FST ? 1 : 0, PRIM->ABE ? 1 : 0, static_cast<int>(m_context->ALPHA.A), static_cast<int>(m_context->ALPHA.B),
 			static_cast<int>(m_context->ALPHA.C), static_cast<int>(m_context->ALPHA.D), static_cast<int>(m_cached_ctx.TEST.ZTE),
-			static_cast<int>(m_cached_ctx.TEST.ZTST), m_cached_ctx.ZBUF.ZMSK ? 1 : 0);
+			static_cast<int>(m_cached_ctx.TEST.ZTST), m_cached_ctx.ZBUF.ZMSK ? 1 : 0, static_cast<int>(m_vt.m_primclass),
+			PRIM->TME ? 1 : 0, m_vertex->next, m_vt.m_min.p.x, m_vt.m_min.p.y, m_vt.m_max.p.x, m_vt.m_max.p.y,
+			rt ? static_cast<u32>(rt->m_TEX0.TBP0) : 0xffffu, PRIM->TME ? static_cast<u32>(m_cached_ctx.TEX0.TBP0) : 0xffffu);
 	}
 }
 
@@ -492,6 +569,10 @@ void GSRendererHW::VolumetricStereoConstants(GSTextureCache::Target* rt)
 // next frame recreates its targets from that memory, as after a change of the upscale multiplier.
 void GSRendererHW::VolumetricEndVSync()
 {
+	// Overlays not drawn for a few vsyncs are gone (VolumetricClassifyDraw).
+	m_vr.overlay_vsync++;
+	std::erase_if(m_vr.overlay_seen, [v = m_vr.overlay_vsync](const auto& e) { return v - e.second.second > 8; });
+
 	GSVolumetric::ApplyStereo();
 	const GSVolumetric::StereoSettings& stereo = GSVolumetric::GetStereo();
 	const u32 layers = (stereo.enabled && stereo.multiview) ? 2 : 1;

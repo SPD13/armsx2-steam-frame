@@ -33,6 +33,8 @@ layout(std140, set = 0, binding = 0) uniform cb0
 // of a window: geometry at the convergence stays on the screen, the farthest moves most. With
 // multiview, view 0 is the left eye and view 1 the right. The portal also scales the picture about
 // the screen centre for the eye's distance (GSVolumetric::StereoSettings).
+// FST draws come with zero constants (no shift) unless the renderer places them in the scene (effects
+// drawn as 2D overlays, see GSRendererHW::VolumetricClassifyDraw).
 vec2 VRStereoPlace(vec2 p, float q, float z_ndc)
 {
 #if MULTIVIEW
@@ -99,9 +101,7 @@ void main()
 	gl_Position.xy = gl_Position.xy * vec2(VertexScale.x, -VertexScale.y) - vec2(VertexOffset.x, -VertexOffset.y);
 	gl_Position.z *= exp2(-32.0f);		// integer->float depth
 	gl_Position.y = -gl_Position.y;
-#if !VS_FST
 	gl_Position.xy = VRStereoPlace(gl_Position.xy, a_q, gl_Position.z);
-#endif
 
 #if GPU_PROFILE_MALI
 	// Mali HW bug (PPSSPP EQUAL_WZ_CORRUPTS_DEPTH): clip-space z == w corrupts the
@@ -211,9 +211,7 @@ ProcessedVertex load_vertex(uint index)
 	vtx.p.xy = vtx.p.xy * vec2(VertexScale.x, -VertexScale.y) - vec2(VertexOffset.x, -VertexOffset.y);
 	vtx.p.z *= exp2(-32.0f);		// integer->float depth
 	vtx.p.y = -vtx.p.y;
-#if !VS_FST
 	vtx.p.xy = VRStereoPlace(vtx.p.xy, a_q, vtx.p.z);
-#endif
 
 	#if VS_TME
 		vec2 uv = a_uv - TextureOffset;
