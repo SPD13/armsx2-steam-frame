@@ -222,9 +222,9 @@ fragment float4 ps_interlace5(ConvertShaderData data [[stage_in]], ConvertPSRes 
 	constant GSMTLInterlacePSUniform& uniform [[buffer(GSMTLBufferIndexUniforms)]])
 {
 	const int    field = int(uniform.ZrH.x) & 1;
-	const int    line  = int(floor((data.p.y - uniform.field_pad.w) / uniform.field_pad.z));
+	const int    native_line = int(floor((data.p.y - uniform.field_pad.w) / uniform.field_pad.z));
 	const float4 c     = res.sample_level(data.t, 0);
-	if ((line & 1) == field)
+	if ((native_line & 1) == field)
 		return c;
 
 	const float2 vstep = float2(0.0f, uniform.field_pad.z * uniform.ZrH.y); // one native line

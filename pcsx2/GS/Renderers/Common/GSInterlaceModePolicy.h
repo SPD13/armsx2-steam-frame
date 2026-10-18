@@ -31,7 +31,8 @@ struct GSInterlaceModeSelection
 // video_playing: the IPU decoded a picture lately. A movie shown in frame mode is a woven picture whose
 // two fields need not agree (interlaced video, or encoded that way), and combs where they differ; the
 // scaling to the screen smears that into a blur. Automatic then runs the comb pass (shader_mode 4),
-// which leaves a still picture whole. Frame mode without a movie is left alone.
+// which leaves a still picture whole. Frame mode without a movie is left alone. The caller passes
+// false unless the movie_comb_deinterlace setting is on (off by default).
 constexpr GSInterlaceModeSelection SelectGSInterlaceMode(
 	int configured_mode, bool automatic, bool game_deinterlacing, bool ffmd, bool scanmask_frame,
 	bool field_render_is_whole_picture = false, bool video_playing = false)

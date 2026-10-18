@@ -253,9 +253,9 @@ void ps_main4()
 void ps_main5()
 {
 	const int   field = int(ZrH.x) & 1;
-	const int   line  = int(floor((gl_FragCoord.y - FieldPad.w) / FieldPad.z));
+	const int   native_line = int(floor((gl_FragCoord.y - FieldPad.w) / FieldPad.z));
 	const vec4  c     = textureLod(samp0, v_tex, 0);
-	if ((line & 1) == field)
+	if ((native_line & 1) == field)
 	{
 		o_col0 = c;
 		return;

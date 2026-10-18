@@ -230,9 +230,9 @@ void ps_main4()
 void ps_main5()
 {
 	int   field = int(ZrH.x) & 1;
-	int   line  = int(floor((gl_FragCoord.y - FieldPad.w) / FieldPad.z));
+	int   native_line = int(floor((gl_FragCoord.y - FieldPad.w) / FieldPad.z));
 	vec4  c     = textureLod(TextureSampler, PSin_t, 0.0);
-	if ((line & 1) == field)
+	if ((native_line & 1) == field)
 	{
 		SV_Target0 = c;
 		return;

@@ -252,7 +252,7 @@ bool GSRenderer::Merge(int field)
 		m_regs->SMODE2.FFMD,
 		scanmask_frame,
 		field_render_is_whole_picture,
-		m_video_merges_left > 0);
+		GSConfig.MovieCombDeinterlace && m_video_merges_left > 0);
 	const int field2 = interlace_selection.field_offset;
 	const bool present_field_direct = interlace_selection.present_field_direct;
 	int mode = interlace_selection.shader_mode;

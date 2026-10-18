@@ -234,9 +234,9 @@ float4 ps_main4(PS_INPUT input) : SV_Target0
 float4 ps_main5(PS_INPUT input) : SV_Target0
 {
 	const int   field = int(ZrH.x) & 1;
-	const int   line  = int(floor((input.p.y - FieldPad.w) / FieldPad.z));
+	const int   native_line = int(floor((input.p.y - FieldPad.w) / FieldPad.z));
 	const float4 c    = Texture.SampleLevel(Sampler, input.t, 0);
-	if ((line & 1) == field)
+	if ((native_line & 1) == field)
 		return c;
 
 	const float2 vstep = float2(0.0f, FieldPad.z * ZrH.y); // one native line
