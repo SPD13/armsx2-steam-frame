@@ -23,8 +23,8 @@ namespace usb_lightgun
 		std::span<const SettingInfo> Settings(u32 subtype) const override;
 	};
 
-	// ARMSX2 VR: a host that drives each port's gun itself (VR controllers as light guns), instead
-	// of through the shared mouse pointer and input bindings. Buttons are a mask of these bits.
+	// A frontend that drives each port's gun itself (for example VR controllers as light guns),
+	// instead of through the shared mouse pointer and input bindings. Buttons are a mask of these bits.
 	enum HostButton : u32
 	{
 		HOST_C = 1u << 1,

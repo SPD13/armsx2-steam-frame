@@ -98,7 +98,7 @@ namespace usb_lightgun
 		// {"SLES-51229", 85.75f, 92.0f, 456, 164, 640, 256}, // Virtua Cop - Elite Edition (E,J) (480p)
 	};
 
-	// ARMSX2 VR: per-port gun state from the host (SetHostState).
+	// Per-port gun state from a frontend that drives the guns itself (SetHostState).
 	struct HostState
 	{
 		std::atomic<bool> active{false};
@@ -303,7 +303,7 @@ namespace usb_lightgun
 			us->param_x = static_cast<u16>(data[0]) | (static_cast<u16>(data[1]) << 8);
 			us->param_y = static_cast<u16>(data[2]) | (static_cast<u16>(data[3]) << 8);
 			us->param_mode = static_cast<u16>(data[4]) | (static_cast<u16>(data[5]) << 8);
-			// ARMSX2 VR: always logged, it is the game's own calibration (useful when aiming is off).
+			// Always logged: it is the game's own calibration, which is what to look at when aiming is off.
 			Console.WriteLn("GunCon2 Set Param %04X %d %d", us->param_mode, us->param_x, us->param_y);
 			if (us->port < std::size(s_host_state))
 			{
@@ -328,7 +328,7 @@ namespace usb_lightgun
 			{
 				if (p->ep->nr == 1)
 				{
-					// ARMSX2 VR: the host's buttons replace the bound ones while it drives this port.
+					// The frontend's buttons replace the bound ones while it drives this port.
 					if (us->port < std::size(s_host_state) && s_host_state[us->port].active.load(std::memory_order_acquire))
 						us->button_state = s_host_state[us->port].buttons.load(std::memory_order_relaxed);
 
@@ -435,7 +435,7 @@ namespace usb_lightgun
 		float pointer_x, pointer_y;
 		if (port < std::size(s_host_state) && s_host_state[port].active.load(std::memory_order_acquire))
 		{
-			// ARMSX2 VR: this port's own aim from the host.
+			// This port's own aim, from the frontend.
 			const HostState& h = s_host_state[port];
 			if (h.aim_valid.load(std::memory_order_relaxed))
 				GSTranslateWindowToDisplayCoordinates(h.x.load(std::memory_order_relaxed), h.y.load(std::memory_order_relaxed),

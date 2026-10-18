@@ -115,11 +115,12 @@ if(UNIX AND ENABLE_LIBRETRO)
 	add_subdirectory(pcsx2-libretro)
 endif()
 
-# ARMSX2 VR: out-of-tree frontend (the Steam Frame VR host) built against the core.
-# The core's CMake relies on being the top-level project, so the host comes in from here.
-set(PS2V_HOST_DIR "" CACHE PATH "Source directory of the ARMSX2 VR VR host, empty to skip it")
-if(PS2V_HOST_DIR)
-	add_subdirectory(${PS2V_HOST_DIR} ps2v-host)
+# Out-of-tree frontend: a frontend kept in its own source tree, built against this core. The core's
+# CMake relies on being the top-level project, so such a frontend can't add the core itself and
+# comes in from here instead. Empty (the default) adds nothing.
+set(EXTERNAL_FRONTEND_DIR "" CACHE PATH "Source directory of an out-of-tree frontend to build against the core, empty for none")
+if(EXTERNAL_FRONTEND_DIR)
+	add_subdirectory(${EXTERNAL_FRONTEND_DIR} external-frontend)
 endif()
 
 #-------------------------------------------------------------------------------

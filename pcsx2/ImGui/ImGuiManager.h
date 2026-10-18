@@ -67,8 +67,8 @@ namespace ImGuiManager
 	/// Renders any on-screen display elements.
 	void RenderOSD();
 
-	/// ARMSX2 VR: when set, the OSD messages go to the frontend, which shows them itself (outside
-	/// the game's picture), and are not drawn. Called from any thread with the message's key (may be
+	/// When set, the OSD messages go to the frontend, which shows them itself (for example outside
+	/// the game's picture, in a VR frontend), and are not drawn. Called from any thread with the message's key (may be
 	/// empty), its text (without icon) and its duration in seconds. No text and a duration of 0:
 	/// remove the message with that key, or every message when the key is empty too.
 	using OSDMessageHook = void (*)(std::string_view key, std::string_view text, float duration);
